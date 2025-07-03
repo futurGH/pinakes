@@ -1,6 +1,6 @@
 import { Kysely, type SelectQueryBuilder, sql } from "kysely";
 import { LibsqlDialect } from "kysely-libsql";
-import { createClient } from "@libsql/client";
+import { createClient } from "@libsql/client/node";
 import { toDateOrNull } from "./util.ts";
 
 export interface Post {
@@ -52,6 +52,7 @@ export class Database {
 		}
 
 		await this.db.schema.createTable("post")
+			.ifNotExists()
 			.addColumn("creator", "varchar", (col) => col.notNull())
 			.addColumn("rkey", "varchar", (col) => col.notNull())
 			.addColumn("createdAt", "integer", (col) => col.notNull())
@@ -67,16 +68,19 @@ export class Database {
 			.addColumn("embedUrl", "varchar")
 			.addPrimaryKeyConstraint("pk_post", ["creator", "rkey"])
 			.execute();
-		await this.db.schema.createIndex("post_creator_idx").on("post").column("creator").execute();
-		await sql`CREATE INDEX post_embedding_idx ON post (libsql_vector_idx(embedding, 'compress_neighbors=float8'))`
+		await this.db.schema.createIndex("post_creator_idx").ifNotExists().on("post").column("creator")
+			.execute();
+		await sql`CREATE INDEX IF NOT EXISTS post_embedding_idx ON post (libsql_vector_idx(embedding, 'compress_neighbors=float8'))`
 			.execute(this.db);
 
 		await this.db.schema.createTable("repo")
+			.ifNotExists()
 			.addColumn("did", "varchar", (col) => col.primaryKey())
 			.addColumn("rev", "varchar", (col) => col.notNull())
 			.execute();
 
 		await this.db.schema.createTable("config")
+			.ifNotExists()
 			.addColumn("key", "varchar", (col) => col.primaryKey())
 			.addColumn("value", "varchar", (col) => col.notNull())
 			.execute();
@@ -233,6 +237,12 @@ export class Database {
 				value,
 			})
 			.onConflict((oc) => oc.column("key").doUpdateSet({ value }))
+			.execute();
+	}
+
+	async deleteConfig<K extends keyof ConfigSettings>(key: K): Promise<void> {
+		await this.db.deleteFrom("config")
+			.where("key", "=", key)
 			.execute();
 	}
 }

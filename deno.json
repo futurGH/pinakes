@@ -17,7 +17,8 @@
 		"@stricli/core": "npm:@stricli/core@^1.2.0",
 		"kysely": "npm:kysely@^0.28.2",
 		"kysely-libsql": "npm:kysely-libsql@^0.7.1",
-		"p-queue": "npm:p-queue@^8.1.0"
+		"p-queue": "npm:p-queue@^8.1.0",
+		"picocolors": "npm:picocolors@^1.1.1"
 	},
 	"fmt": {
 		"useTabs": true,

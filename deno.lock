@@ -11,7 +11,8 @@
     "npm:@stricli/core@^1.2.0": "1.2.0",
     "npm:kysely-libsql@~0.7.1": "0.7.1_kysely@0.28.2",
     "npm:kysely@~0.28.2": "0.28.2",
-    "npm:p-queue@^8.1.0": "8.1.0"
+    "npm:p-queue@^8.1.0": "8.1.0",
+    "npm:picocolors@^1.1.1": "1.1.1"
   },
   "npm": {
     "@atcute/atproto@3.1.0": {
@@ -777,6 +778,9 @@
     "p-timeout@6.1.4": {
       "integrity": "sha512-MyIV3ZA/PmyBN/ud8vV9XzwTrNtR4jFrObymZYnZqMmW0zA8Z17vnT0rBgFE/TlohB+YCHqXMgZzb3Csp49vqg=="
     },
+    "picocolors@1.1.1": {
+      "integrity": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="
+    },
     "platform@1.3.6": {
       "integrity": "sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg=="
     },
@@ -911,7 +915,8 @@
       "npm:@stricli/core@^1.2.0",
       "npm:kysely-libsql@~0.7.1",
       "npm:kysely@~0.28.2",
-      "npm:p-queue@^8.1.0"
+      "npm:p-queue@^8.1.0",
+      "npm:picocolors@^1.1.1"
     ]
   }
 }
