@@ -1,0 +1,6 @@
+.DS_Store
+.zed/
+.vscode/
+.idea/
+node_modules/
+*.env
