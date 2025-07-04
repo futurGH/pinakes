@@ -203,7 +203,7 @@ export class Backfill {
 							throw new Error(`invalid post record for ${uri}`);
 						}
 						record = threadView.post.record;
-					} catch (e) {
+					} catch {
 						const res = await this.xrpc.queryByDid(
 							repo,
 							(c) =>
@@ -252,7 +252,7 @@ export class Backfill {
 				inclusionReason: inclusion.reason,
 				inclusionContext: inclusion.context,
 			};
-			await this.writePost(post);
+			await this.queueWritePost(post);
 
 			if (quoted) {
 				let quotedRecordView;
@@ -331,9 +331,9 @@ export class Backfill {
 		}
 	}
 
-	async writePost(post: Post): Promise<void> {
+	async queueWritePost(post: Post): Promise<void> {
 		this.toWrite.push(post);
-		await this.writePosts();
+		if (this.toWrite.length > WRITE_POSTS_BATCH_SIZE) void this.writePosts();
 	}
 
 	async writePosts(): Promise<void> {
@@ -441,7 +441,7 @@ class ProgressTracker {
 	start() {
 		for (const key of this.keys) {
 			this.progress[key] = { completed: 0, total: 0 };
-			this.bars[key] = this.multibar.create(100, 0, { key });
+			this.bars[key] = this.multibar.create(100, 0, { key }, { clearOnComplete: false });
 		}
 
 		const { multibar } = this;
