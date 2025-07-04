@@ -9,6 +9,7 @@ import { IdResolver } from "@atproto/identity";
 import PQueue from "p-queue";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DidNotFoundError } from "@atproto/identity";
+import { LruCache } from "@std/cache";
 
 type ExtractSuccessData<T> = T extends { ok: true; data: infer D } ? D : never;
 
@@ -37,7 +38,7 @@ const defaultQueueOptions: ConstructorParameters<typeof PQueue>[0] = {
 export class XRPCManager {
 	clients = new Map<string, { client: Client; queue: PQueue }>();
 	idResolver = new IdResolver();
-	didToServiceCache = new Map<string, string | null>();
+	didToServiceCache = new LruCache<string, string | null>(100_000);
 
 	async query<T extends UnknownClientResponse>(
 		service: string,
@@ -94,6 +95,7 @@ export class XRPCManager {
 				reset = parseInt(`${error.headers["rate-limit-reset"]}`);
 			}
 			if (reset) {
+				console.warn(`rate limited, retrying in ${reset} seconds`, error);
 				await sleep(reset * 1000 - Date.now());
 				return true;
 			}
@@ -105,7 +107,9 @@ export class XRPCManager {
 			"status" in error && typeof error.status === "number" &&
 			retryableStatusCodes.has(error.status)
 		) {
-			await sleep(Math.pow(2.9, attempt + 1) * 1000);
+			const delay = Math.pow(2.9, attempt + 1);
+			console.warn(`retrying ${error.status} in ${delay} seconds`, error);
+			await sleep(delay * 1000);
 			return true;
 		}
 
@@ -140,7 +144,7 @@ export class XRPCManager {
 	}
 }
 
-const fetchHandlerCache = new Map<string, Promise<Response>>();
+const fetchHandlerCache = new LruCache<string, Promise<Response>>(100_000);
 export function cacheFetchHandler(
 	{ service, fetch: _fetch = fetch }: SimpleFetchHandlerOptions,
 ): FetchHandler {

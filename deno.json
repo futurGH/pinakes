@@ -6,7 +6,6 @@
 	"tasks": {
 		"dev": "deno run --watch main.ts"
 	},
-	"nodeModulesDir": "auto",
 	"imports": {
 		"@atcute/atproto": "npm:@atcute/atproto@^3.1.0",
 		"@atcute/bluesky": "npm:@atcute/bluesky@^3.1.4",
@@ -16,6 +15,7 @@
 		"@atproto/identity": "npm:@atproto/identity@^0.4.8",
 		"@huggingface/transformers": "npm:@huggingface/transformers@^3.6.1",
 		"@libsql/client": "npm:@libsql/client@^0.15.9",
+		"@std/cache": "jsr:@std/cache@^0.2.0",
 		"@stricli/core": "npm:@stricli/core@^1.2.0",
 		"@types/cli-progress": "npm:@types/cli-progress@^3.11.6",
 		"cli-progress": "npm:cli-progress@^3.12.0",
