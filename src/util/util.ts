@@ -16,6 +16,8 @@ import {
 } from "@atcute/bluesky";
 import { is } from "@atcute/lexicons/validations";
 import { parseCanonicalResourceUri } from "@atcute/lexicons/syntax";
+import { collectBlock, isCommit, readBlock } from "@atcute/car/v4/repo-reader";
+import { CarReader } from "@atcute/car/v4";
 
 export function toDateOrNull(ts: string | number | undefined | null): Date | null {
 	const date = new Date(ts ?? NaN);
@@ -64,6 +66,14 @@ export function extractAltTexts(embed: AppBskyFeedPost.Main["embed"] | undefined
 	return altTexts;
 }
 
+export function getRepoRev(repo: Uint8Array) {
+	const car = CarReader.fromUint8Array(repo);
+	if (car.roots.length !== 1) return null;
+	const blockmap = collectBlock(car);
+	if (blockmap.size <= 0) return null;
+	return readBlock(blockmap, car.roots[0], isCommit).rev;
+}
+
 export function formatException(exc: unknown): string {
 	if (exc instanceof AliasNotFoundError) {
 		return `no alias found for -${exc.input}`;
@@ -72,13 +82,7 @@ export function formatException(exc: unknown): string {
 		let message = `no flag found for --${exc.input}`;
 		if (exc.corrections.length) {
 			message += `, did you mean ${
-				joinWithGrammar(
-					exc.corrections.map((correction) => `--${correction}`),
-					{
-						conjunction: "or",
-						serialComma: true,
-					},
-				)
+				joinWithGrammar(exc.corrections.map((correction) => `--${correction}`), "or")
 			}?`;
 		}
 	}
@@ -117,23 +121,13 @@ export function formatException(exc: unknown): string {
 	return `${exc}`;
 }
 
-interface ConjuctiveJoin {
-	readonly conjunction: string;
-	readonly serialComma?: boolean;
-}
-
-type JoinGrammar = ConjuctiveJoin;
-
-function joinWithGrammar(parts: readonly string[], grammar: JoinGrammar): string {
+function joinWithGrammar(parts: readonly string[], conjunction: string): string {
 	if (parts.length <= 1) {
 		return parts[0] ?? "";
 	}
 	if (parts.length === 2) {
-		return parts.join(` ${grammar.conjunction} `);
+		return parts.join(` ${conjunction} `);
 	}
-	let allButLast = parts.slice(0, parts.length - 1).join(", ");
-	if (grammar.serialComma) {
-		allButLast += ",";
-	}
-	return [allButLast, grammar.conjunction, parts[parts.length - 1]].join(" ");
+	const allButLast = parts.slice(0, parts.length - 1).join(", ") + ",";
+	return [allButLast, conjunction, parts[parts.length - 1]].join(" ");
 }

@@ -16,8 +16,15 @@ import type { Did, ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
 import { RepoReader } from "@atcute/car/v4";
 import { MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
-import { extractAltTexts, logarithmicScale, parseAtUri, toDateOrNull } from "../util/util.ts";
+import {
+	extractAltTexts,
+	getRepoRev,
+	logarithmicScale,
+	parseAtUri,
+	toDateOrNull,
+} from "../util/util.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
+import { arrayBuffer } from "node:stream/consumers";
 
 export const MAX_DEPTH = 6;
 const MANY_FOLLOWS_MAX_DEPTH = 4;
@@ -112,10 +119,11 @@ export class Backfill {
 		// always fetch full repo for self
 		const rev = isOwnRepo ? "" : await this.db.getRepoRev(did);
 
-		const repoStream = await this.xrpc.queryByDid(
+		const stream = await this.xrpc.queryByDid(
 			did,
 			(c) => c.get("com.atproto.sync.getRepo", { params: { did, since: rev }, as: "stream" }),
 		);
+		const [repoStream, toBufferStream] = stream.tee();
 
 		await using repo = RepoReader.fromStream(repoStream);
 		for await (const { collection, rkey, record } of repo) {
@@ -137,6 +145,10 @@ export class Backfill {
 				}
 			}
 		}
+
+		const repoBytes = new Uint8Array(await arrayBuffer(toBufferStream));
+		const latestRev = getRepoRev(repoBytes);
+		if (latestRev) await this.db.setRepoRev(did, latestRev);
 	}
 
 	async processPost(
