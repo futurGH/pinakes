@@ -42,6 +42,6 @@ async function backfillCommandImpl(
 		);
 	}
 
-	const backfill = new Backfill(did, this.db, { generateEmbeddings: embeddings, depth });
+	const backfill = new Backfill(did, this.db, { embeddings, depth });
 	await backfill.backfill().catch(console.error);
 }

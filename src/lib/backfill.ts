@@ -39,7 +39,7 @@ type PostInclusion = {
 };
 
 export interface BackfillOptions {
-	generateEmbeddings?: boolean;
+	embeddings?: boolean;
 	depth?: number;
 }
 
@@ -60,19 +60,25 @@ export class Backfill {
 			),
 		{ concurrency: 25 },
 	);
-	seenPosts = new Set<string>();
-	toWrite: Array<Post> = [];
+	embeddingsQueue = new BackgroundQueue(
+		(posts: Post[]) =>
+			this.generateEmbeddings(posts).catch((e) => console.error("error generating embeddings:", e)),
+		{ concurrency: 1 },
+	);
 
-	generateEmbeddings: boolean;
+	seenPosts = new Set<string>();
+	toWrite: Post[] = [];
+
+	embeddingsEnabled: boolean;
 	maxDepth: number;
 
 	constructor(public userDid: string, public db: Database, options: BackfillOptions = {}) {
-		this.generateEmbeddings = options.generateEmbeddings ?? true;
+		this.embeddingsEnabled = options.embeddings ?? true;
 		this.maxDepth = options.depth ?? MAX_DEPTH;
 
 		const multibarKeys = Object.keys(this.processors);
 		multibarKeys.push("posts");
-		if (this.generateEmbeddings) multibarKeys.push("embeddings");
+		if (this.embeddingsEnabled) multibarKeys.push("embeddings");
 
 		this.progress = new ProgressTracker(multibarKeys);
 
@@ -99,7 +105,7 @@ export class Backfill {
 			);
 		}
 
-		if (this.generateEmbeddings) {
+		if (this.embeddingsEnabled) {
 			console.log("loading embeddings model...");
 			await loadEmbeddingsModel();
 			console.log("loaded embeddings model");
@@ -114,7 +120,11 @@ export class Backfill {
 				"app.bsky.feed.like",
 				"app.bsky.graph.follow",
 			]);
-			await Promise.allSettled([this.repoQueue.processAll(), this.postQueue.processAll()]);
+			await Promise.allSettled([
+				this.repoQueue.processAll(),
+				this.postQueue.processAll(),
+				this.embeddingsQueue.processAll(),
+			]);
 			await this.writePosts();
 		}
 		console.log(`backfill complete`);
@@ -281,44 +291,44 @@ export class Backfill {
 	async writePosts(): Promise<void> {
 		while (this.toWrite.length > 0) {
 			const batch = this.toWrite.splice(0, WRITE_POSTS_BATCH_SIZE);
-
-			if (this.generateEmbeddings) {
-				batch.forEach(() => this.progress.incrementTotal("embeddings"));
-				const [hasText, hasTextIndices] = batch.reduce<[Post[], number[]]>(
-					([posts, indices], post, i) => {
-						post.text && (posts.push(post), indices.push(i));
-						return [posts, indices];
-					},
-					[[], []],
-				);
-				const [hasAltText, hasAltTextIndices] = batch.reduce<[Post[], number[]]>(
-					([posts, indices], post, i) => {
-						post.altText && (posts.push(post), indices.push(i));
-						return [posts, indices];
-					},
-					[[], []],
-				);
-
-				try {
-					const [textEmbeddings, altTextEmbeddings] = await Promise.all([
-						hasText.length ? extractEmbeddings(hasText.map((p) => p.text)) : [],
-						hasAltText.length ? extractEmbeddings(hasAltText.map((p) => p.altText!)) : [],
-					]);
-
-					textEmbeddings.forEach((embedding, i) => {
-						batch[hasTextIndices[i]].embedding = embedding;
-					});
-					altTextEmbeddings.forEach((embedding, i) => {
-						batch[hasAltTextIndices[i]].altTextEmbedding = embedding;
-					});
-				} catch (error) {
-					console.error("error generating embeddings:", error);
-				} finally {
-					batch.forEach(() => this.progress.incrementCompleted("embeddings"));
-				}
-			}
-
 			await this.db.insertPosts(batch).catch((e) => console.error("error inserting posts:", e));
+			if (this.embeddingsEnabled) this.embeddingsQueue.add(batch);
+		}
+	}
+
+	async generateEmbeddings(posts: Post[]) {
+		posts.forEach(() => this.progress.incrementTotal("embeddings"));
+		const [hasText, hasTextIndices] = posts.reduce<[Post[], number[]]>(
+			([posts, indices], post, i) => {
+				post.text && (posts.push(post), indices.push(i));
+				return [posts, indices];
+			},
+			[[], []],
+		);
+		const [hasAltText, hasAltTextIndices] = posts.reduce<[Post[], number[]]>(
+			([posts, indices], post, i) => {
+				post.altText && (posts.push(post), indices.push(i));
+				return [posts, indices];
+			},
+			[[], []],
+		);
+
+		try {
+			const [textEmbeddings, altTextEmbeddings] = await Promise.all([
+				hasText.length ? extractEmbeddings(hasText.map((p) => p.text)) : [],
+				hasAltText.length ? extractEmbeddings(hasAltText.map((p) => p.altText!)) : [],
+			]);
+
+			textEmbeddings.forEach((embedding, i) => {
+				posts[hasTextIndices[i]].embedding = embedding;
+			});
+			altTextEmbeddings.forEach((embedding, i) => {
+				posts[hasAltTextIndices[i]].altTextEmbedding = embedding;
+			});
+		} catch (error) {
+			console.error("error generating embeddings:", error);
+		} finally {
+			posts.forEach(() => this.progress.incrementCompleted("embeddings"));
 		}
 	}
 

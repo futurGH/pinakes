@@ -130,7 +130,25 @@ export class Database {
 				inclusionReason: post.inclusionReason,
 				inclusionContext: post.inclusionContext,
 			})))
-			.onConflict((oc) => oc.doNothing())
+			.onConflict((oc) =>
+				oc.doUpdateSet((eb) => ({
+					creator: eb.ref("excluded.creator"),
+					rkey: eb.ref("excluded.rkey"),
+					createdAt: eb.ref("excluded.createdAt"),
+					text: eb.ref("excluded.text"),
+					embedding: eb.ref("excluded.embedding"),
+					altText: eb.ref("excluded.altText"),
+					altTextEmbedding: eb.ref("excluded.altTextEmbedding"),
+					replyParent: eb.ref("excluded.replyParent"),
+					replyRoot: eb.ref("excluded.replyRoot"),
+					quoted: eb.ref("excluded.quoted"),
+					embedTitle: eb.ref("excluded.embedTitle"),
+					embedDescription: eb.ref("excluded.embedDescription"),
+					embedUrl: eb.ref("excluded.embedUrl"),
+					inclusionReason: eb.ref("excluded.inclusionReason"),
+					inclusionContext: eb.ref("excluded.inclusionContext"),
+				}))
+			)
 			.execute();
 	}
 
