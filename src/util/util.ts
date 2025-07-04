@@ -12,6 +12,7 @@ import {
 	AppBskyEmbedImages,
 	AppBskyEmbedRecordWithMedia,
 	AppBskyEmbedVideo,
+	AppBskyFeedDefs,
 	type AppBskyFeedPost,
 } from "@atcute/bluesky";
 import { is } from "@atcute/lexicons/validations";
@@ -64,6 +65,17 @@ export function extractAltTexts(embed: AppBskyFeedPost.Main["embed"] | undefined
 		altTexts = extractAltTexts(embed.media) ?? [];
 	}
 	return altTexts;
+}
+
+export function tryExtractRootPostFromThreadView(
+	view: AppBskyFeedDefs.ThreadViewPost,
+	rootUri: string,
+): AppBskyFeedDefs.ThreadViewPost | null {
+	let parent = view;
+	while (is(AppBskyFeedDefs.threadViewPostSchema, parent.parent)) {
+		parent = parent.parent;
+	}
+	return parent.post.uri === rootUri ? parent : null;
 }
 
 export function getRepoRev(repo: Uint8Array) {

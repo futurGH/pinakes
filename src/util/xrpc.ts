@@ -57,6 +57,16 @@ export class XRPCManager {
 		}))!;
 	}
 
+	async queryNoRetry<T extends UnknownClientResponse>(
+		service: string,
+		fn: (client: Client) => Promise<T>,
+	): Promise<ExtractSuccessData<T>> {
+		const { client, queue } = this.getOrCreateClient(service);
+		return (await queue.add(async (): Promise<ExtractSuccessData<T>> => {
+			return await ok(fn(client));
+		}))!;
+	}
+
 	async queryByDid<T extends UnknownClientResponse>(
 		did: string,
 		fn: (client: Client) => Promise<T>,

@@ -22,6 +22,7 @@ import {
 	logarithmicScale,
 	parseAtUri,
 	toDateOrNull,
+	tryExtractRootPostFromThreadView,
 } from "../util/util.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
 import { arrayBuffer } from "node:stream/consumers";
@@ -174,7 +175,7 @@ export class Backfill {
 
 	async processPost(
 		uri: ResourceUri,
-		{ inclusion, record, depth = 0 }: ProcessPostOptions,
+		{ inclusion, record, threadView, depth = 0 }: ProcessPostOptions,
 	): Promise<void> {
 		try {
 			this.progress.incrementTotal("posts");
@@ -186,17 +187,40 @@ export class Backfill {
 			this.seenPosts.add(`${repo}/${rkey}`);
 
 			if (!record) {
-				const res = await this.xrpc.queryByDid(
-					repo,
-					(c) =>
-						c.get("com.atproto.repo.getRecord", {
-							params: { collection: "app.bsky.feed.post", repo, rkey },
-						}),
-				);
-				if (!is(AppBskyFeedPost.mainSchema, res.value)) {
-					throw new Error(`invalid post record: ${uri}`);
+				if (threadView && is(AppBskyFeedPost.mainSchema, threadView.post.record)) {
+					record = threadView.post.record;
+				} else {
+					try {
+						const { thread } = await this.xrpc.queryNoRetry(
+							PUBLIC_APPVIEW_URL,
+							(c) => c.get("app.bsky.feed.getPostThread", { params: { uri } }),
+						);
+						if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) {
+							throw new Error(`invalid thread view for ${uri}`);
+						}
+						threadView = thread;
+						if (!is(AppBskyFeedPost.mainSchema, threadView.post.record)) {
+							throw new Error(`invalid post record for ${uri}`);
+						}
+						record = threadView.post.record;
+					} catch (e) {
+						const res = await this.xrpc.queryByDid(
+							repo,
+							(c) =>
+								c.get("com.atproto.repo.getRecord", {
+									params: { collection: "app.bsky.feed.post", repo, rkey },
+								}),
+						).catch((e) => {
+							console.error(`failed to fetch post record for ${uri}: ${e.message}`);
+							return null;
+						});
+						if (!res) return;
+						if (!is(AppBskyFeedPost.mainSchema, res.value)) {
+							throw new Error(`invalid post record for ${uri}`);
+						}
+						record = res.value;
+					}
 				}
-				record = res.value;
 			}
 
 			const createdAt = toDateOrNull(record.createdAt)?.getTime();
@@ -231,36 +255,60 @@ export class Backfill {
 			await this.writePost(post);
 
 			if (quoted) {
+				let quotedRecordView;
+				if (threadView) {
+					if (
+						is(AppBskyEmbedRecord.viewSchema, threadView.post.embed) &&
+						is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record)
+					) {
+						quotedRecordView = threadView.post.embed.record;
+					} else if (
+						is(AppBskyEmbedRecordWithMedia.viewSchema, threadView.post.embed) &&
+						is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record.record)
+					) {
+						quotedRecordView = threadView.post.embed.record.record;
+					}
+				}
 				this.postQueue.add(quoted, {
 					depth: depth + 1,
+					record: is(AppBskyFeedPost.mainSchema, quotedRecordView?.value)
+						? quotedRecordView.value
+						: undefined,
 					inclusion: { reason: "quoted_by", context: uri },
 				});
 			}
 
 			if (record.reply) {
+				const rootThreadView = threadView
+					? tryExtractRootPostFromThreadView(threadView, record.reply.root.uri)
+					: null;
 				this.postQueue.add(record.reply.root.uri, {
 					depth, // navigating upthread then down to siblings should only add 1 to depth
+					threadView: rootThreadView ?? undefined,
 					inclusion: { reason: "same_thread_as", context: uri },
 				});
 			} else {
-				const { thread } = await this.xrpc.query(
-					PUBLIC_APPVIEW_URL,
-					(c) => c.get("app.bsky.feed.getPostThread", { params: { uri, depth: 20 } }),
-				).catch((e) => {
-					console.error(`error fetching thread for ${uri}`, e);
-					return { thread: null };
-				});
-				if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) return;
+				if (!threadView) {
+					const { thread } = await this.xrpc.query(
+						PUBLIC_APPVIEW_URL,
+						(c) => c.get("app.bsky.feed.getPostThread", { params: { uri, depth: 20 } }),
+					).catch((e) => {
+						console.error(`error fetching thread for ${uri}`, e);
+						return { thread: null };
+					});
+					if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) return;
+					threadView = thread;
+				}
 
 				// for a thread with 50 replies, go up to 20 levels deep
 				// for a thread with 500 replies, go up to 4 levels deep
 				// in between, scale logarithmically
 				const maxReplyDepth = Math.round(
-					logarithmicScale([50, 500], [20, 4], thread.post.replyCount ?? 0),
+					logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
 				);
 
 				const { postQueue } = this;
-				thread.replies?.forEach((reply) =>
+				threadView.replies?.forEach((reply) =>
 					(function processReply(reply, replyDepth) {
 						if (replyDepth > maxReplyDepth) return;
 						if (
@@ -268,7 +316,7 @@ export class Backfill {
 							!is(AppBskyFeedPost.mainSchema, reply.post.record)
 						) return;
 						postQueue.add(reply.post.uri, {
-							record: reply.post.record,
+							threadView: reply,
 							depth: depth + 1,
 							inclusion: { reason: "same_thread_as", context: uri },
 						});
@@ -364,6 +412,7 @@ export class Backfill {
 interface ProcessPostOptions {
 	inclusion: PostInclusion;
 	record?: AppBskyFeedPost.Main;
+	threadView?: AppBskyFeedDefs.ThreadViewPost;
 	depth?: number;
 }
 
