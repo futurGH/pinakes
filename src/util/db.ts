@@ -130,6 +130,7 @@ export class Database {
 				inclusionReason: post.inclusionReason,
 				inclusionContext: post.inclusionContext,
 			})))
+			.onConflict((oc) => oc.doNothing())
 			.execute();
 	}
 

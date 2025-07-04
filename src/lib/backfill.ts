@@ -48,14 +48,14 @@ export class Backfill {
 	xrpc = new XRPCManager();
 	postQueue = new BackgroundQueue(
 		(uri: ResourceUri, options: ProcessPostOptions, sourceCollection?: string) =>
-			this.processPost(uri, options).catch(console.warn).finally(() =>
+			this.processPost(uri, options).finally(() =>
 				this.progress.incrementCompleted(sourceCollection)
 			),
 		{ concurrency: 100 },
 	);
 	repoQueue = new BackgroundQueue(
 		(did: Did, collections?: string[]) =>
-			this.processRepo(did, collections).catch(console.warn).finally(() =>
+			this.processRepo(did, collections).finally(() =>
 				this.progress.incrementCompleted("app.bsky.graph.follow")
 			),
 		{ concurrency: 25 },
@@ -104,7 +104,12 @@ export class Backfill {
 		console.log(`backfilling index for user ${handle}...`);
 		{
 			using _logging = this.progress.start();
-			await this.processRepo(this.userDid as Did);
+			await this.processRepo(this.userDid as Did, [
+				"app.bsky.feed.post",
+				"app.bsky.feed.repost",
+				"app.bsky.feed.like",
+				"app.bsky.graph.follow",
+			]);
 			await Promise.allSettled([this.repoQueue.processAll(), this.postQueue.processAll()]);
 			await this.writePosts();
 		}
@@ -115,40 +120,42 @@ export class Backfill {
 		did: Did,
 		collections = ["app.bsky.feed.post", "app.bsky.feed.repost"],
 	): Promise<void> {
-		const isOwnRepo = did === this.userDid;
-		// always fetch full repo for self
-		const rev = isOwnRepo ? "" : await this.db.getRepoRev(did);
+		try {
+			const isOwnRepo = did === this.userDid;
+			// always fetch full repo for self
+			const rev = isOwnRepo ? "" : await this.db.getRepoRev(did);
 
-		const stream = await this.xrpc.queryByDid(
-			did,
-			(c) => c.get("com.atproto.sync.getRepo", { params: { did, since: rev }, as: "stream" }),
-		);
-		const [repoStream, toBufferStream] = stream.tee();
+			const stream = await this.xrpc.queryByDid(
+				did,
+				(c) => c.get("com.atproto.sync.getRepo", { params: { did, since: rev }, as: "stream" }),
+			);
+			const [repoStream, toBufferStream] = stream.tee();
 
-		await using repo = RepoReader.fromStream(repoStream);
-		for await (const { collection, rkey, record } of repo) {
-			if (collections.includes(collection) && collection in this.processors) {
-				const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
+			await using repo = RepoReader.fromStream(repoStream);
+			for await (const { collection, rkey, record } of repo) {
+				if (collections.includes(collection) && collection in this.processors) {
+					const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
 
-				if (collection in this.progress) {
 					this.progress.incrementTotal(collection);
-				}
 
-				if (collection === "app.bsky.feed.post") {
-					if (isOwnRepo) {
-						this.processors[collection](uri, record, { reason: "self" });
+					if (collection === "app.bsky.feed.post") {
+						if (isOwnRepo) {
+							this.processors[collection](uri, record, { reason: "self" });
+						} else {
+							this.processors[collection](uri, record, { reason: "by_follow" });
+						}
 					} else {
-						this.processors[collection](uri, record, { reason: "by_follow" });
+						this.processors[collection](uri, record);
 					}
-				} else {
-					this.processors[collection](uri, record);
 				}
 			}
-		}
 
-		const repoBytes = new Uint8Array(await arrayBuffer(toBufferStream));
-		const latestRev = getRepoRev(repoBytes);
-		if (latestRev) await this.db.setRepoRev(did, latestRev);
+			const repoBytes = new Uint8Array(await arrayBuffer(toBufferStream));
+			const latestRev = getRepoRev(repoBytes);
+			if (latestRev) await this.db.setRepoRev(did, latestRev);
+		} catch (e) {
+			console.error(`failed to process repo ${did}: ${e}`);
+		}
 	}
 
 	async processPost(
@@ -156,13 +163,13 @@ export class Backfill {
 		{ inclusion, record, depth = 0 }: ProcessPostOptions,
 	): Promise<void> {
 		try {
+			this.progress.incrementTotal("posts");
+
 			if (depth > this.maxDepth) return;
 
 			const { repo, rkey } = parseAtUri(uri);
 			if (this.seenPosts.has(`${repo}/${rkey}`)) return;
 			this.seenPosts.add(`${repo}/${rkey}`);
-
-			this.progress.incrementTotal("posts");
 
 			if (!record) {
 				const res = await this.xrpc.queryByDid(
@@ -252,6 +259,8 @@ export class Backfill {
 					})(reply, 1)
 				);
 			}
+		} catch (e) {
+			console.warn(`failed to process post ${uri}`, e);
 		} finally {
 			this.progress.incrementCompleted("posts");
 		}
@@ -285,8 +294,8 @@ export class Backfill {
 
 				try {
 					const [textEmbeddings, altTextEmbeddings] = await Promise.all([
-						extractEmbeddings(hasText.map((p) => p.text)),
-						extractEmbeddings(hasAltText.map((p) => p.altText!)),
+						hasText.length ? extractEmbeddings(hasText.map((p) => p.text)) : [],
+						hasAltText.length ? extractEmbeddings(hasAltText.map((p) => p.altText!)) : [],
 					]);
 
 					textEmbeddings.forEach((embedding, i) => {
@@ -344,7 +353,7 @@ interface ProcessPostOptions {
 class ProgressTracker {
 	progress: Record<string, { completed: number; total: number }> = {};
 	multibar = new MultiBar(
-		{ format: " {key}  {bar}  {value}/{total}" },
+		{ format: " {key}  {bar}  {value}/{total}", fps: 30 },
 		BarPresets.shades_classic,
 	);
 	bars: Record<string, SingleBar> = {};

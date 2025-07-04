@@ -5,7 +5,7 @@ import {
 	WebDidDocumentResolver,
 } from "@atcute/identity-resolver";
 import PQueue from "p-queue";
-import { setTimeout as sleep } from "timers/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 
 type ExtractSuccessData<T> = T extends { ok: true; data: infer D } ? D : never;
 
@@ -39,6 +39,7 @@ export class XRPCManager {
 			web: new WebDidDocumentResolver(),
 		},
 	});
+	didToServiceCache = new Map<string, string | null>();
 
 	async query<T extends UnknownClientResponse>(
 		service: string,
@@ -69,6 +70,12 @@ export class XRPCManager {
 
 	async shouldRetry(error: unknown, attempt = 0) {
 		if (!error || typeof error !== "object") return false;
+
+		const errorStr = `${error}`.toLowerCase();
+		if (errorStr.includes("tcp") || errorStr.includes("network") || errorStr.includes("dns")) {
+			return true;
+		}
+
 		if (error instanceof TypeError) return false;
 
 		if ("headers" in error && error.headers) {
@@ -111,11 +118,23 @@ export class XRPCManager {
 	}
 
 	async getServiceForDid(did: string) {
-		const didDoc = await this.idResolver.resolve(did as `did:plc:${string}`);
-		const endpoint = didDoc.service?.find((s) => s.id === "#atproto_pds")?.serviceEndpoint;
+		const fromCache = this.didToServiceCache.get(did);
+		if (fromCache) return fromCache;
+
+		const didDoc = await this.idResolver.resolve(did as `did:plc:${string}`)
+			.catch((e) => {
+				if (e instanceof Error && e.name === "ImproperContentTypeError") {
+					this.didToServiceCache.set(did, null);
+					return undefined;
+				}
+				throw e;
+			});
+		const endpoint = didDoc?.service?.find((s) => s.id === "#atproto_pds")?.serviceEndpoint;
 		if (endpoint && typeof endpoint !== "string") {
 			throw new Error("invalid service endpoint in did document");
 		}
+
+		if (endpoint) this.didToServiceCache.set(did, endpoint);
 		return endpoint;
 	}
 }

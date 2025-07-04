@@ -1,6 +1,7 @@
 import { buildApplication, buildRouteMap } from "@stricli/core";
 import { configRoute } from "./commands/config/index.ts";
 import { formatException } from "./util/util.ts";
+import { backfillCommand } from "./commands/backfill.ts";
 
 const { name, version, description } =
 	(await import("../deno.json", { with: { type: "json" } })).default;
@@ -8,6 +9,7 @@ const { name, version, description } =
 const routes = buildRouteMap({
 	routes: {
 		config: configRoute,
+		backfill: backfillCommand,
 	},
 	docs: {
 		brief: description,
