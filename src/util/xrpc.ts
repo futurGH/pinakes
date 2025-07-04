@@ -1,11 +1,14 @@
-import { Client, ok, simpleFetchHandler, type XRPCErrorPayload } from "@atcute/client";
 import {
-	CompositeDidDocumentResolver,
-	PlcDidDocumentResolver,
-	WebDidDocumentResolver,
-} from "@atcute/identity-resolver";
+	Client,
+	type FetchHandler,
+	ok,
+	type SimpleFetchHandlerOptions,
+	type XRPCErrorPayload,
+} from "@atcute/client";
+import { IdResolver } from "@atproto/identity";
 import PQueue from "p-queue";
 import { setTimeout as sleep } from "node:timers/promises";
+import { DidNotFoundError } from "@atproto/identity";
 
 type ExtractSuccessData<T> = T extends { ok: true; data: infer D } ? D : never;
 
@@ -33,12 +36,7 @@ const defaultQueueOptions: ConstructorParameters<typeof PQueue>[0] = {
 
 export class XRPCManager {
 	clients = new Map<string, { client: Client; queue: PQueue }>();
-	idResolver = new CompositeDidDocumentResolver({
-		methods: {
-			plc: new PlcDidDocumentResolver(),
-			web: new WebDidDocumentResolver(),
-		},
-	});
+	idResolver = new IdResolver();
 	didToServiceCache = new Map<string, string | null>();
 
 	async query<T extends UnknownClientResponse>(
@@ -52,7 +50,7 @@ export class XRPCManager {
 				return await ok(fn(client));
 			} catch (error) {
 				if (await this.shouldRetry(error, attempt++)) {
-					return this.query(service, fn);
+					return await this.query(service, fn);
 				}
 				throw error;
 			}
@@ -65,7 +63,7 @@ export class XRPCManager {
 	): Promise<ExtractSuccessData<T>> {
 		const service = await this.getServiceForDid(did);
 		if (!service) throw new Error("no service endpoint found for did " + did);
-		return this.query(service, fn);
+		return await this.query(service, fn);
 	}
 
 	async shouldRetry(error: unknown, attempt = 0) {
@@ -106,7 +104,7 @@ export class XRPCManager {
 
 	createClient(service: string, queueOptions?: ConstructorParameters<typeof PQueue>[0]) {
 		const data = {
-			client: new Client({ handler: simpleFetchHandler({ service }) }),
+			client: new Client({ handler: cacheFetchHandler({ service }) }),
 			queue: new PQueue({ ...defaultQueueOptions, ...queueOptions }),
 		};
 		this.clients.set(service, data);
@@ -118,23 +116,36 @@ export class XRPCManager {
 	}
 
 	async getServiceForDid(did: string) {
-		const fromCache = this.didToServiceCache.get(did);
-		if (fromCache) return fromCache;
+		if (this.didToServiceCache.has(did)) return this.didToServiceCache.get(did)!;
 
-		const didDoc = await this.idResolver.resolve(did as `did:plc:${string}`)
+		const { pds } = await this.idResolver.did.resolveAtprotoData(did)
 			.catch((e) => {
-				if (e instanceof Error && e.name === "ImproperContentTypeError") {
-					this.didToServiceCache.set(did, null);
-					return undefined;
+				if (e instanceof DidNotFoundError) {
+					return { pds: null };
 				}
 				throw e;
 			});
-		const endpoint = didDoc?.service?.find((s) => s.id === "#atproto_pds")?.serviceEndpoint;
-		if (endpoint && typeof endpoint !== "string") {
-			throw new Error("invalid service endpoint in did document");
+		this.didToServiceCache.set(did, pds);
+		return pds;
+	}
+}
+
+const fetchHandlerCache = new Map<string, Promise<Response>>();
+export function cacheFetchHandler(
+	{ service, fetch: _fetch = fetch }: SimpleFetchHandlerOptions,
+): FetchHandler {
+	return async (pathname, init) => {
+		const cacheKey = `${service}/${pathname}:${init.body}`;
+		if (fetchHandlerCache.has(cacheKey)) {
+			return await fetchHandlerCache.get(cacheKey)!;
 		}
 
-		if (endpoint) this.didToServiceCache.set(did, endpoint);
-		return endpoint;
-	}
+		const url = new URL(pathname, service);
+		// @ts-expect-error — RequestInit type mismatch between node and deno
+		const promise = _fetch(url, init);
+		fetchHandlerCache.set(cacheKey, promise);
+		const res = await promise;
+		if (retryableStatusCodes.has(res.status)) fetchHandlerCache.delete(cacheKey);
+		return res;
+	};
 }

@@ -87,7 +87,11 @@ export class Backfill {
 		const { handle, followsCount } = await this.xrpc.query(
 			PUBLIC_APPVIEW_URL,
 			(c) => c.get("app.bsky.actor.getProfile", { params: { actor: this.userDid as Did } }),
-		);
+		).catch((e) => {
+			console.error(`error fetching profile for ${this.userDid}: ${e}`);
+			return { handle: undefined, followsCount: 0 };
+		});
+		if (!handle) return;
 
 		if (this.maxDepth === MAX_DEPTH && (followsCount ?? 0) > MANY_FOLLOWS_THRESHOLD) {
 			console.warn(
@@ -232,7 +236,10 @@ export class Backfill {
 				const { thread } = await this.xrpc.query(
 					PUBLIC_APPVIEW_URL,
 					(c) => c.get("app.bsky.feed.getPostThread", { params: { uri, depth: 20 } }),
-				);
+				).catch((e) => {
+					console.error(`error fetching thread for ${uri}`, e);
+					return { thread: null };
+				});
 				if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) return;
 
 				// for a thread with 50 replies, go up to 20 levels deep
