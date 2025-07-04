@@ -17,6 +17,7 @@ import { is } from "@atcute/lexicons/validations";
 import { RepoReader } from "@atcute/car/v4";
 import { MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
 import { extractAltTexts, logarithmicScale, parseAtUri, toDateOrNull } from "../util/util.ts";
+import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
 
 export const MAX_DEPTH = 6;
 const MANY_FOLLOWS_MAX_DEPTH = 4;
@@ -40,14 +41,14 @@ export class Backfill {
 	xrpc = new XRPCManager();
 	postQueue = new BackgroundQueue(
 		(uri: ResourceUri, options: ProcessPostOptions, sourceCollection?: string) =>
-			this.processPost(uri, options).finally(() =>
+			this.processPost(uri, options).catch(console.warn).finally(() =>
 				this.progress.incrementCompleted(sourceCollection)
 			),
 		{ concurrency: 100 },
 	);
 	repoQueue = new BackgroundQueue(
 		(did: Did, collections?: string[]) =>
-			this.processRepo(did, collections).finally(() =>
+			this.processRepo(did, collections).catch(console.warn).finally(() =>
 				this.progress.incrementCompleted("app.bsky.graph.follow")
 			),
 		{ concurrency: 25 },
@@ -87,7 +88,13 @@ export class Backfill {
 			);
 		}
 
-		console.log(`backfilling index for user ${handle}`);
+		if (this.generateEmbeddings) {
+			console.log("loading embeddings model...");
+			await loadEmbeddingsModel();
+			console.log("loaded embeddings model");
+		}
+
+		console.log(`backfilling index for user ${handle}...`);
 		{
 			using _logging = this.progress.start();
 			await this.processRepo(this.userDid as Did);
@@ -246,7 +253,44 @@ export class Backfill {
 	async writePosts(): Promise<void> {
 		while (this.toWrite.length > 0) {
 			const batch = this.toWrite.splice(0, WRITE_POSTS_BATCH_SIZE);
-			await this.db.insertPosts(batch);
+
+			if (this.generateEmbeddings) {
+				batch.forEach(() => this.progress.incrementTotal("embeddings"));
+				const [hasText, hasTextIndices] = batch.reduce<[Post[], number[]]>(
+					([posts, indices], post, i) => {
+						post.text && (posts.push(post), indices.push(i));
+						return [posts, indices];
+					},
+					[[], []],
+				);
+				const [hasAltText, hasAltTextIndices] = batch.reduce<[Post[], number[]]>(
+					([posts, indices], post, i) => {
+						post.altText && (posts.push(post), indices.push(i));
+						return [posts, indices];
+					},
+					[[], []],
+				);
+
+				try {
+					const [textEmbeddings, altTextEmbeddings] = await Promise.all([
+						extractEmbeddings(hasText.map((p) => p.text)),
+						extractEmbeddings(hasAltText.map((p) => p.altText!)),
+					]);
+
+					textEmbeddings.forEach((embedding, i) => {
+						batch[hasTextIndices[i]].embedding = embedding;
+					});
+					altTextEmbeddings.forEach((embedding, i) => {
+						batch[hasAltTextIndices[i]].altTextEmbedding = embedding;
+					});
+				} catch (error) {
+					console.error("error generating embeddings:", error);
+				} finally {
+					batch.forEach(() => this.progress.incrementCompleted("embeddings"));
+				}
+			}
+
+			await this.db.insertPosts(batch).catch((e) => console.error("error inserting posts:", e));
 		}
 	}
 
