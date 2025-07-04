@@ -1,4 +1,4 @@
-import { Client, type ClientResponse, ok, simpleFetchHandler } from "@atcute/client";
+import { Client, ok, simpleFetchHandler, type XRPCErrorPayload } from "@atcute/client";
 import {
 	CompositeDidDocumentResolver,
 	PlcDidDocumentResolver,
@@ -9,8 +9,27 @@ import { setTimeout as sleep } from "timers/promises";
 
 type ExtractSuccessData<T> = T extends { ok: true; data: infer D } ? D : never;
 
+type UnknownClientResponse =
+	& {
+		status: number;
+		headers: Headers;
+	}
+	& ({
+		ok: true;
+		data: unknown;
+	} | {
+		ok: false;
+		data: XRPCErrorPayload;
+	});
+
 const retryableStatusCodes = new Set([408, 429, 500, 502, 503, 504]);
 const maxRetries = 5;
+
+const defaultQueueOptions: ConstructorParameters<typeof PQueue>[0] = {
+	concurrency: 10,
+	interval: 300 * 1000,
+	intervalCap: 3000,
+};
 
 export class XRPCManager {
 	clients = new Map<string, { client: Client; queue: PQueue }>();
@@ -21,7 +40,7 @@ export class XRPCManager {
 		},
 	});
 
-	async query<T extends ClientResponse<unknown, unknown>>(
+	async query<T extends UnknownClientResponse>(
 		service: string,
 		fn: (client: Client) => Promise<T>,
 	): Promise<ExtractSuccessData<T>> {
@@ -39,7 +58,7 @@ export class XRPCManager {
 		}))!;
 	}
 
-	async queryByDid<T extends ClientResponse<unknown, unknown>>(
+	async queryByDid<T extends UnknownClientResponse>(
 		did: string,
 		fn: (client: Client) => Promise<T>,
 	): Promise<ExtractSuccessData<T>> {
@@ -81,7 +100,7 @@ export class XRPCManager {
 	createClient(service: string, queueOptions?: ConstructorParameters<typeof PQueue>[0]) {
 		const data = {
 			client: new Client({ handler: simpleFetchHandler({ service }) }),
-			queue: new PQueue(queueOptions),
+			queue: new PQueue({ ...defaultQueueOptions, ...queueOptions }),
 		};
 		this.clients.set(service, data);
 		return data;

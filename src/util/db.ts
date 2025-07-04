@@ -3,20 +3,31 @@ import { LibsqlDialect } from "kysely-libsql";
 import { createClient } from "@libsql/client/node";
 import { toDateOrNull } from "./util.ts";
 
+export type PostInclusionReason =
+	| "self"
+	| "liked_by_self"
+	| "reposted_by"
+	| "same_thread_as"
+	| "quoted_by"
+	| "linked_by"
+	| "by_follow";
+
 export interface Post {
 	creator: string;
 	rkey: string;
 	createdAt: number;
 	text: string;
-	embedding: Float32Array | null;
-	altText: string | null;
-	altTextEmbedding: Float32Array | null;
-	replyParent: string | null;
-	replyRoot: string | null;
-	quoted: string | null;
-	embedTitle: string | null;
-	embedDescription: string | null;
-	embedUrl: string | null;
+	embedding?: Float32Array | null;
+	altText?: string | null;
+	altTextEmbedding?: Float32Array | null;
+	replyParent?: string | null;
+	replyRoot?: string | null;
+	quoted?: string | null;
+	embedTitle?: string | null;
+	embedDescription?: string | null;
+	embedUrl?: string | null;
+	inclusionReason: PostInclusionReason;
+	inclusionContext?: string | null;
 }
 
 export interface Repo {
@@ -66,6 +77,8 @@ export class Database {
 			.addColumn("embedTitle", "varchar")
 			.addColumn("embedDescription", "varchar")
 			.addColumn("embedUrl", "varchar")
+			.addColumn("inclusionReason", "varchar", (col) => col.notNull())
+			.addColumn("inclusionContext", "varchar")
 			.addPrimaryKeyConstraint("pk_post", ["creator", "rkey"])
 			.execute();
 		await this.db.schema.createIndex("post_creator_idx").ifNotExists().on("post").column("creator")
@@ -92,25 +105,32 @@ export class Database {
 			altTextEmbedding?: Float32Array | null;
 		},
 	) {
-		const embedding = post.embedding ? formatVector(post.embedding) : null;
-		const altTextEmbedding = post.altTextEmbedding ? formatVector(post.altTextEmbedding) : null;
+		return this.insertPosts([post]);
+	}
+
+	async insertPosts(posts: (Omit<Post, "embedding" | "altTextEmbedding"> & {
+		embedding?: Float32Array | null;
+		altTextEmbedding?: Float32Array | null;
+	})[]) {
 		await this.db.insertInto("post")
-			.values({
+			.values(posts.map((post) => ({
 				creator: post.creator,
 				rkey: post.rkey,
 				createdAt: post.createdAt,
 				text: post.text,
-				embedding,
+				embedding: post.embedding ? formatVector(post.embedding) : null,
 				altText: post.altText,
-				altTextEmbedding,
+				altTextEmbedding: post.altTextEmbedding ? formatVector(post.altTextEmbedding) : null,
 				replyParent: post.replyParent,
 				replyRoot: post.replyRoot,
 				quoted: post.quoted,
 				embedTitle: post.embedTitle,
 				embedDescription: post.embedDescription,
 				embedUrl: post.embedUrl,
-			})
-			.executeTakeFirst();
+				inclusionReason: post.inclusionReason,
+				inclusionContext: post.inclusionContext,
+			})))
+			.execute();
 	}
 
 	async getPost(creator: string, rkey: string) {
@@ -170,6 +190,8 @@ export class Database {
 				"embedTitle",
 				"embedDescription",
 				"embedUrl",
+				"inclusionReason",
+				"inclusionContext",
 				distanceExpr.as("textDistance"),
 				...(includeAltText ? [altDistanceExpr.as("altTextDistance")] : []),
 				bestDistanceExpr.as("bestDistance"),

@@ -8,10 +8,60 @@ import {
 	UnsatisfiedFlagError,
 	UnsatisfiedPositionalError,
 } from "@stricli/core";
+import {
+	AppBskyEmbedImages,
+	AppBskyEmbedRecordWithMedia,
+	AppBskyEmbedVideo,
+	type AppBskyFeedPost,
+} from "@atcute/bluesky";
+import { is } from "@atcute/lexicons/validations";
+import { parseCanonicalResourceUri } from "@atcute/lexicons/syntax";
 
 export function toDateOrNull(ts: string | number | undefined | null): Date | null {
 	const date = new Date(ts ?? NaN);
 	return isNaN(date.getTime()) ? null : date;
+}
+
+export function parseAtUri(uri: string) {
+	const parsed = parseCanonicalResourceUri(uri);
+	if (!parsed.ok) throw new Error(`invalid AT URI: ${uri}`);
+	return parsed.value;
+}
+
+export function logarithmicScale(
+	from: [number, number],
+	to: [number, number],
+	input: number,
+): number {
+	if (input <= from[0]) return to[0];
+	if (input >= from[1]) return to[1];
+
+	if (from[0] === from[1] || to[0] === to[1]) return to[0];
+
+	const logFromMin = Math.log(from[0]);
+	const logFromMax = Math.log(from[1]);
+	const logToMin = Math.log(to[0]);
+	const logToMax = Math.log(to[1]);
+	const logInput = Math.log(input);
+
+	const t = (logInput - logFromMin) / (logFromMax - logFromMin);
+	const logResult = logToMin + t * (logToMax - logToMin);
+
+	return Math.exp(logResult);
+}
+
+export function extractAltTexts(embed: AppBskyFeedPost.Main["embed"] | undefined) {
+	if (!embed) return null;
+
+	let altTexts: string[] = [];
+	if (is(AppBskyEmbedImages.mainSchema, embed)) {
+		altTexts = embed.images.map((image) => image.alt);
+	} else if (is(AppBskyEmbedVideo.mainSchema, embed) && embed.alt) {
+		altTexts = [embed.alt];
+	} else if (is(AppBskyEmbedRecordWithMedia.mainSchema, embed)) {
+		altTexts = extractAltTexts(embed.media) ?? [];
+	}
+	return altTexts;
 }
 
 export function formatException(exc: unknown): string {
