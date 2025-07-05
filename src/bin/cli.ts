@@ -2,4 +2,4 @@
 import { run } from "@stricli/core";
 import { buildContext } from "../context.ts";
 import { app } from "../app.ts";
-await run(app, Deno.args, await buildContext());
+await run(app, process.argv.slice(2), await buildContext());

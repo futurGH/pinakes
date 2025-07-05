@@ -1,15 +1,9 @@
-import {
-	Client,
-	type FetchHandler,
-	ok,
-	type SimpleFetchHandlerOptions,
-	type XRPCErrorPayload,
-} from "@atcute/client";
+import { Client, ok, simpleFetchHandler, type XRPCErrorPayload } from "@atcute/client";
 import { IdResolver } from "@atproto/identity";
-import PQueue from "p-queue";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DidNotFoundError } from "@atproto/identity";
 import { LruCache } from "@std/cache";
+import { Agent, setGlobalDispatcher } from "undici";
 
 type ExtractSuccessData<T> = T extends { ok: true; data: infer D } ? D : never;
 
@@ -26,47 +20,16 @@ type UnknownClientResponse =
 		data: XRPCErrorPayload;
 	});
 
-const retryableStatusCodes = new Set([408, 429, 500, 502, 503, 504]);
+const agent = new Agent({ pipelining: 0 });
+setGlobalDispatcher(agent);
+
+const retryableStatusCodes = new Set([408, 429, 503, 504]);
 const maxRetries = 5;
 
-const defaultQueueOptions: ConstructorParameters<typeof PQueue>[0] = {
-	concurrency: 10,
-	interval: 300 * 1000,
-	intervalCap: 3000,
-};
-
 export class XRPCManager {
-	clients = new Map<string, { client: Client; queue: PQueue }>();
+	clients = new Map<string, Client>();
 	idResolver = new IdResolver();
 	didToServiceCache = new LruCache<string, string | null>(100_000);
-
-	async query<T extends UnknownClientResponse>(
-		service: string,
-		fn: (client: Client) => Promise<T>,
-	): Promise<ExtractSuccessData<T>> {
-		const { client, queue } = this.getOrCreateClient(service);
-		let attempt = 0;
-		return (await queue.add(async (): Promise<ExtractSuccessData<T>> => {
-			try {
-				return await ok(fn(client));
-			} catch (error) {
-				if (await this.shouldRetry(error, attempt++)) {
-					return await this.query(service, fn);
-				}
-				throw error;
-			}
-		}))!;
-	}
-
-	async queryNoRetry<T extends UnknownClientResponse>(
-		service: string,
-		fn: (client: Client) => Promise<T>,
-	): Promise<ExtractSuccessData<T>> {
-		const { client, queue } = this.getOrCreateClient(service);
-		return (await queue.add(async (): Promise<ExtractSuccessData<T>> => {
-			return await ok(fn(client));
-		}))!;
-	}
 
 	async queryByDid<T extends UnknownClientResponse>(
 		did: string,
@@ -77,7 +40,42 @@ export class XRPCManager {
 		return await this.query(service, fn);
 	}
 
-	async shouldRetry(error: unknown, attempt = 0) {
+	async query<T extends UnknownClientResponse>(
+		service: string,
+		fn: (client: Client) => Promise<T>,
+		attempt = 0,
+	): Promise<ExtractSuccessData<T>> {
+		try {
+			return await this.queryNoRetry(service, fn);
+		} catch (error) {
+			if (await this.shouldRetry(error, attempt++)) {
+				return await this.query(service, fn, attempt);
+			}
+			throw error;
+		}
+	}
+
+	async queryNoRetry<T extends UnknownClientResponse>(
+		service: string,
+		fn: (client: Client) => Promise<T>,
+	): Promise<ExtractSuccessData<T>> {
+		if (service === "https://atproto.brid.gy") throw new Error("bridgy unsupported");
+
+		const client = this.getOrCreateClient(service);
+		return await ok(fn(client));
+	}
+
+	createClient(service: string) {
+		const client = new Client({ handler: simpleFetchHandler({ service }) });
+		this.clients.set(service, client);
+		return client;
+	}
+
+	getOrCreateClient(service: string) {
+		return this.clients.get(service) ?? this.createClient(service);
+	}
+
+	private async shouldRetry(error: unknown, attempt = 0) {
 		if (!error || typeof error !== "object") return false;
 
 		const errorStr = `${error}`.toLowerCase();
@@ -85,6 +83,9 @@ export class XRPCManager {
 			return true;
 		}
 
+		// this ought to be true, but we just want to rethrow AbortErrors to be handled
+		// by the BackgroundQueue so that the task can be retied later
+		if (error instanceof DOMException && error.name === "AbortError") return false;
 		if (error instanceof TypeError) return false;
 
 		if ("headers" in error && error.headers) {
@@ -107,7 +108,7 @@ export class XRPCManager {
 			"status" in error && typeof error.status === "number" &&
 			retryableStatusCodes.has(error.status)
 		) {
-			const delay = Math.pow(2.9, attempt + 1);
+			const delay = Math.pow(3, attempt + 1);
 			console.warn(`retrying ${error.status} in ${delay} seconds`, error);
 			await sleep(delay * 1000);
 			return true;
@@ -116,20 +117,7 @@ export class XRPCManager {
 		return false;
 	}
 
-	createClient(service: string, queueOptions?: ConstructorParameters<typeof PQueue>[0]) {
-		const data = {
-			client: new Client({ handler: cacheFetchHandler({ service }) }),
-			queue: new PQueue({ ...defaultQueueOptions, ...queueOptions }),
-		};
-		this.clients.set(service, data);
-		return data;
-	}
-
-	getOrCreateClient(service: string, queueOptions?: ConstructorParameters<typeof PQueue>[0]) {
-		return this.clients.get(service) ?? this.createClient(service, queueOptions);
-	}
-
-	async getServiceForDid(did: string) {
+	private async getServiceForDid(did: string) {
 		if (this.didToServiceCache.has(did)) return this.didToServiceCache.get(did)!;
 
 		const { pds } = await this.idResolver.did.resolveAtprotoData(did)
@@ -139,38 +127,8 @@ export class XRPCManager {
 				}
 				throw e;
 			});
-		this.didToServiceCache.set(did, pds);
-		return pds;
-	}
-}
-
-const fetchHandlerCache = new LruCache<string, Promise<Response>>(100_000);
-export function cacheFetchHandler(
-	{ service, fetch: _fetch = fetch }: SimpleFetchHandlerOptions,
-): FetchHandler {
-	return async (pathname, init) => {
-		const cacheKey = `${service}/${pathname}:${init.body}`;
-		if (fetchHandlerCache.has(cacheKey)) {
-			return await fetchHandlerCache.get(cacheKey)!;
-		}
-
-		const url = new URL(pathname, service);
-
-		if (url.host === "atproto.brid.gy") throw new BridgyError();
-
-		// @ts-expect-error — RequestInit type mismatch between node and deno
-		const promise = _fetch(url, init);
-		fetchHandlerCache.set(cacheKey, promise);
-		const res = await promise;
-		if (retryableStatusCodes.has(res.status)) fetchHandlerCache.delete(cacheKey);
-		return res;
-	};
-}
-
-class BridgyError extends Error {
-	override name = "BridgyError";
-	constructor() {
-		super();
-		this.message = "bridgy repo export not supported";
+		const service = pds ? new URL(pds).origin : null;
+		this.didToServiceCache.set(did, service);
+		return service;
 	}
 }

@@ -4,7 +4,7 @@ import { formatException } from "./util/util.ts";
 import { backfillCommand } from "./commands/backfill.ts";
 
 const { name, version, description } =
-	(await import("../deno.json", { with: { type: "json" } })).default;
+	(await import("../package.json", { with: { type: "json" } })).default;
 
 const routes = buildRouteMap({
 	routes: {

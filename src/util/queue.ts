@@ -1,101 +1,118 @@
-import PQueue from "p-queue";
+import { EventEmitter } from "node:events";
 
-// a simple queue that only runs one function with no need for the output
-// and can therefore store only arguments instead of promises
-export class BackgroundQueue<T extends readonly unknown[]> {
-	private pqueue: PQueue;
-	private queue: T[];
-	private originalConcurrency: number;
-	private activeTasks: number = 0;
-	private allTasks: Set<Promise<unknown>> = new Set();
+export interface QueueOptions {
+	hardConcurrency: number; // will never have more than this many tasks running at once
+	softConcurrency?: number; // long running tasks "fall off" from this limit after softTimeoutMs but continue to count towards softConcurrency
+	softTimeoutMs?: number;
+}
 
-	constructor(
-		private fn: (...args: T) => unknown,
-		options: ConstructorParameters<typeof PQueue>[0],
-	) {
-		this.originalConcurrency = options?.concurrency ?? 1;
-		this.queue = [];
-
-		if (this.originalConcurrency <= 1) {
-			// if queue is sequential, just process in order
-			this.pqueue = new PQueue(options);
-			this.pqueue.on("completed", () => {
-				const args = this.queue.shift();
-				if (args) this.run(...args);
-			});
-		} else {
-			// if queue is parallel, pass p-queue a very high concurrency limit and handle concurrency ourselves
-			this.pqueue = new PQueue({ ...options, concurrency: 200_000 });
-		}
+// task queue that only stores args rather than promises
+// and has a soft concurrency limit that can be exceeded by long-running tasks
+export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter {
+	activeTasks = 0; // tasks currently counting against softConcurrency
+	get totalRunning() { // all tasks currently running
+		return this._running;
+	}
+	get size() { // waiting jobs not yet started
+		return this._queue.length;
 	}
 
-	get size() {
-		return this.queue.length + this.pqueue.size;
+	private readonly _queue: T[] = [];
+	private _running = 0;
+
+	private readonly _fn: (...args: T) => unknown;
+	private readonly _hard: number;
+	private readonly _soft?: number;
+	private readonly _softTimeout: number;
+
+	constructor(
+		fn: (...args: T) => unknown,
+		{
+			hardConcurrency,
+			softConcurrency,
+			softTimeoutMs = 10_000,
+		}: QueueOptions,
+	) {
+		super();
+		this._fn = fn;
+		this._hard = hardConcurrency;
+		this._soft = softConcurrency;
+		this._softTimeout = softTimeoutMs;
 	}
 
 	add(...args: T) {
-		if (this.originalConcurrency <= 1) {
-			// sequential processing
-			if (this.pqueue.size === 0 && this.pqueue.pending <= this.pqueue.concurrency) {
-				this.run(...args);
-			} else {
-				this.queue.push(args);
-			}
-		} else {
-			// custom concurrency limiting
-			if (this.activeTasks < this.originalConcurrency) {
-				this.run(...args);
-			} else {
-				this.queue.push(args);
-			}
-		}
+		this._queue.push(args);
+		this.emit("queued");
+		this._drain();
 	}
 
-	async processAll() {
-		if (this.originalConcurrency <= 1) {
-			while (this.queue.length) {
-				this.run(...this.queue.shift()!);
-			}
-			await this.pqueue.onIdle();
-		} else {
-			// run all queued tasks
-			while (this.queue.length) {
-				this.run(...this.queue.shift()!);
-			}
-			// wait for all tasks, including long-running ones
-			await Promise.all(this.allTasks);
-		}
-	}
+	async processAll(): Promise<void> {
+		if (this.size === 0 && this._running === 0) return;
 
-	private run(...args: T) {
-		if (this.originalConcurrency <= 1) {
-			// sequential processing
-			void this.pqueue.add(() => this.fn(...args))
-				.catch(console.error);
-		} else {
-			// custom concurrency limiting
-			this.activeTasks++;
-
-			let completed = false;
-			const taskPromise = this.pqueue.add(() => this.fn(...args))
-				.catch(console.error)
-				.finally(() => {
-					this.allTasks.delete(taskPromise);
-					completed = true;
-				});
-
-			this.allTasks.add(taskPromise);
-
-			// after 10 seconds, stop counting this task towards concurrency
-			setTimeout(() => {
-				if (completed) return;
-				this.activeTasks--;
-				// try to start queued tasks
-				if (this.queue.length > 0 && this.activeTasks < this.originalConcurrency) {
-					const args = this.queue.shift()!;
-					this.run(...args);
+		return await new Promise((resolve) => {
+			const onDone = () => {
+				if (this.size === 0 && this._running === 0) {
+					this.off("completed", onDone);
+					this.off("error", onDone);
+					resolve();
 				}
-			}, 10000);
+			};
+			this.on("completed", onDone);
+			this.on("error", onDone);
+			// trigger check in case nothing new is emitted
+			onDone();
+		});
+	}
+
+	private _canStart(): boolean {
+		if (this._queue.length === 0) return false;
+		if (this._running >= this._hard) return false;
+		if (this._soft !== undefined && this.activeTasks >= this._soft) return false;
+		return true;
+	}
+
+	private _drain() {
+		while (this._canStart()) {
+			const args = this._queue.shift()!;
+			this._startTask(args);
 		}
+	}
+
+	private _startTask(args: T) {
+		this._running++;
+
+		let countsTowardsSoft = this._soft !== undefined;
+		if (countsTowardsSoft) this.activeTasks++;
+
+		const timeoutId = countsTowardsSoft
+			? setTimeout(() => {
+				if (countsTowardsSoft) {
+					countsTowardsSoft = false;
+					this.activeTasks = Math.max(this.activeTasks - 1, 0);
+					this._drain();
+				}
+			}, this._softTimeout)
+			: null;
+
+		Promise.resolve()
+			.then(() => this._fn(...args))
+			.catch((err) => {
+				// re-queue AbortErrored tasks, emit everything else
+				if (err instanceof DOMException && err.name === "AbortError") {
+					this._queue.push(args);
+				} else {
+					this.emit("error", err);
+				}
+			})
+			.finally(() => {
+				this._running--;
+				if (timeoutId) clearTimeout(timeoutId);
+				if (countsTowardsSoft) {
+					// fast tasks that finished before the soft timeout
+					this.activeTasks = Math.max(this.activeTasks - 1, 0);
+				}
+				this.emit("completed");
+				this._drain();
+			});
 	}
 }

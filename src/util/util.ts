@@ -17,8 +17,12 @@ import {
 } from "@atcute/bluesky";
 import { is } from "@atcute/lexicons/validations";
 import { parseCanonicalResourceUri } from "@atcute/lexicons/syntax";
-import { collectBlock, isCommit, readBlock } from "@atcute/car/v4/repo-reader";
-import { CarReader } from "@atcute/car/v4";
+
+export function errorToString(error: unknown): string {
+	return typeof error === "object" && error !== null && "message" in error
+		? `${error.message}`
+		: `${error}`;
+}
 
 export function toDateOrNull(ts: string | number | undefined | null): Date | null {
 	const date = new Date(ts ?? NaN);
@@ -76,14 +80,6 @@ export function tryExtractRootPostFromThreadView(
 		parent = parent.parent;
 	}
 	return parent.post.uri === rootUri ? parent : null;
-}
-
-export function getRepoRev(repo: Uint8Array) {
-	const car = CarReader.fromUint8Array(repo);
-	if (car.roots.length !== 1) return null;
-	const blockmap = collectBlock(car);
-	if (blockmap.size <= 0) return null;
-	return readBlock(blockmap, car.roots[0], isCommit).rev;
 }
 
 export function formatException(exc: unknown): string {

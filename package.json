@@ -1,0 +1,28 @@
+{
+	"name": "pinakes",
+	"version": "0.1.0",
+	"description": "a personal bluesky index",
+	"dependencies": {
+		"@atcute/atproto": "^3.1.0",
+		"@atcute/bluesky": "^3.1.4",
+		"@atcute/car": "^3.1.1",
+		"@atcute/cbor": "^2.2.5",
+		"@atcute/cid": "^2.2.3",
+		"@atcute/client": "^4.0.3",
+		"@atcute/lexicons": "^1.1.0",
+		"@atproto/identity": "^0.4.8",
+		"@huggingface/transformers": "^3.6.1",
+		"@libsql/client": "^0.15.9",
+		"@std/cache": "npm:@jsr/std__cache@^0.2.0",
+		"@stricli/core": "^1.2.0",
+		"cli-progress": "^3.12.0",
+		"kysely": "^0.28.2",
+		"kysely-libsql": "^0.7.1",
+		"picocolors": "^1.1.1",
+		"undici": "^7.11.0",
+		"xxhash-wasm": "^1.1.0"
+	},
+	"devDependencies": {
+		"@types/cli-progress": "^3.11.6"
+	}
+}

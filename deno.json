@@ -1,29 +1,4 @@
 {
-	"name": "pinakes",
-	"version": "0.1.0",
-	"description": "a personal bluesky index",
-	"exports": "./src/app.ts",
-	"tasks": {
-		"dev": "deno run --watch main.ts"
-	},
-	"imports": {
-		"@atcute/atproto": "npm:@atcute/atproto@^3.1.0",
-		"@atcute/bluesky": "npm:@atcute/bluesky@^3.1.4",
-		"@atcute/car": "npm:@atcute/car@^3.1.1",
-		"@atcute/client": "npm:@atcute/client@^4.0.3",
-		"@atcute/lexicons": "npm:@atcute/lexicons@^1.1.0",
-		"@atproto/identity": "npm:@atproto/identity@^0.4.8",
-		"@huggingface/transformers": "npm:@huggingface/transformers@^3.6.1",
-		"@libsql/client": "npm:@libsql/client@^0.15.9",
-		"@std/cache": "jsr:@std/cache@^0.2.0",
-		"@stricli/core": "npm:@stricli/core@^1.2.0",
-		"@types/cli-progress": "npm:@types/cli-progress@^3.11.6",
-		"cli-progress": "npm:cli-progress@^3.12.0",
-		"kysely": "npm:kysely@^0.28.2",
-		"kysely-libsql": "npm:kysely-libsql@^0.7.1",
-		"p-queue": "npm:p-queue@^8.1.0",
-		"picocolors": "npm:picocolors@^1.1.1"
-	},
 	"fmt": {
 		"useTabs": true,
 		"useBraces": "whenNotSingleLine",

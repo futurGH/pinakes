@@ -14,21 +14,27 @@ import {
 import type {} from "@atcute/atproto";
 import type { Did, ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
-import { RepoReader } from "@atcute/car/v4";
+import { CarReader, RepoReader } from "@atcute/car/v4";
 import { MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
 import {
+	errorToString,
 	extractAltTexts,
-	getRepoRev,
 	logarithmicScale,
 	parseAtUri,
 	toDateOrNull,
 	tryExtractRootPostFromThreadView,
 } from "../util/util.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
-import { arrayBuffer } from "node:stream/consumers";
+import { ClientResponseError } from "@atcute/client";
+import { toCidLink } from "@atcute/cid";
+import { decode as decodeCbor } from "@atcute/cbor";
+import { isCommit } from "@atcute/car/v4/repo-reader";
+import xxhash from "xxhash-wasm";
 
-export const MAX_DEPTH = 6;
-const MANY_FOLLOWS_MAX_DEPTH = 4;
+const { h32 } = await xxhash();
+
+export const MAX_DEPTH = 5;
+const MANY_FOLLOWS_MAX_DEPTH = 3;
 const MANY_FOLLOWS_THRESHOLD = 250;
 const WRITE_POSTS_BATCH_SIZE = 20;
 
@@ -48,26 +54,27 @@ export class Backfill {
 	progress: ProgressTracker;
 	xrpc = new XRPCManager();
 	postQueue = new BackgroundQueue(
+		// sourceCollection, if provided, is the collection this post "came from"
 		(uri: ResourceUri, options: ProcessPostOptions, sourceCollection?: string) =>
 			this.processPost(uri, options).finally(() =>
 				this.progress.incrementCompleted(sourceCollection)
 			),
-		{ concurrency: 100 },
+		{ softConcurrency: 25, hardConcurrency: 100 },
 	);
 	repoQueue = new BackgroundQueue(
 		(did: Did, collections?: string[]) =>
 			this.processRepo(did, collections).finally(() =>
 				this.progress.incrementCompleted("app.bsky.graph.follow")
 			),
-		{ concurrency: 25 },
+		{ softConcurrency: 10, hardConcurrency: 20 },
 	);
 	embeddingsQueue = new BackgroundQueue(
 		(posts: Post[]) =>
 			this.generateEmbeddings(posts).catch((e) => console.error("error generating embeddings:", e)),
-		{ concurrency: 1 },
+		{ hardConcurrency: 1 },
 	);
 
-	seenPosts = new Set<string>();
+	seenPosts = new Set<number>();
 	toWrite: Post[] = [];
 
 	embeddingsEnabled: boolean;
@@ -82,12 +89,10 @@ export class Backfill {
 		if (this.embeddingsEnabled) multibarKeys.push("embeddings");
 
 		this.progress = new ProgressTracker(multibarKeys);
-
-		this.xrpc.createClient(PUBLIC_APPVIEW_URL, {
-			concurrency: 25,
-			interval: 300 * 1000,
-			intervalCap: 10_000,
-		});
+		this.postQueue.on("queued", () => this.progress.incrementTotal("posts"));
+		this.postQueue.on("completed", () => this.progress.incrementCompleted("posts"));
+		this.postQueue.on("error", console.error);
+		this.repoQueue.on("error", console.error);
 	}
 
 	async backfill() {
@@ -95,15 +100,17 @@ export class Backfill {
 			PUBLIC_APPVIEW_URL,
 			(c) => c.get("app.bsky.actor.getProfile", { params: { actor: this.userDid as Did } }),
 		).catch((e) => {
-			console.error(`error fetching profile for ${this.userDid}: ${e}`);
+			console.error(`error fetching profile for ${this.userDid}: ${errorToString(e)}`);
 			return { handle: undefined, followsCount: 0 };
 		});
 		if (!handle) return;
 
+		// post count scales massively with follows
 		if (this.maxDepth === MAX_DEPTH && (followsCount ?? 0) > MANY_FOLLOWS_THRESHOLD) {
 			console.warn(
 				`high follow count detected, reducing search depth from ${MAX_DEPTH} to ${MANY_FOLLOWS_MAX_DEPTH} — pass the --depth flag to override`,
 			);
+			this.maxDepth = MANY_FOLLOWS_MAX_DEPTH;
 		}
 
 		if (this.embeddingsEnabled) {
@@ -113,27 +120,40 @@ export class Backfill {
 		}
 
 		console.log(`backfilling index for user ${handle}...`);
+		const startTime = performance.now();
 		{
-			using _logging = this.progress.start();
+			using _logging = this.progress.start(); // auto resets console.* at the end of the block
+
 			await this.processRepo(this.userDid as Did, [
 				"app.bsky.feed.post",
 				"app.bsky.feed.repost",
 				"app.bsky.feed.like",
 				"app.bsky.graph.follow",
 			]);
-			await Promise.allSettled([
-				this.repoQueue.processAll(),
-				this.postQueue.processAll(),
-				this.embeddingsQueue.processAll(),
-			]);
+			while (this.repoQueue.size > 0 || this.postQueue.size > 0 || this.embeddingsQueue.size > 0) {
+				await Promise.allSettled([
+					(async () => {
+						while (this.repoQueue.size > 0) await this.repoQueue.processAll();
+					})(),
+					(async () => {
+						while (this.postQueue.size > 0) await this.postQueue.processAll();
+					})(),
+					this.embeddingsEnabled && (async () => {
+						while (this.embeddingsQueue.size > 0) await this.embeddingsQueue.processAll();
+					})(),
+				]);
+			}
 			await this.writePosts();
 		}
-		console.log(`backfill complete`);
+		const endTime = performance.now();
+		const mins = Math.floor((endTime - startTime) / 60_000);
+		const secs = Math.floor((endTime - startTime) / 1000) % 60;
+		console.log(`backfill complete in ${mins}m ${secs}s`);
 	}
 
 	async processRepo(
 		did: Did,
-		collections = ["app.bsky.feed.post", "app.bsky.feed.repost"],
+		collections = ["app.bsky.feed.post", "app.bsky.feed.repost"], // for anyone but the user, only process posts and reposts
 	): Promise<void> {
 		try {
 			const isOwnRepo = did === this.userDid;
@@ -144,32 +164,46 @@ export class Backfill {
 				did,
 				(c) => c.get("com.atproto.sync.getRepo", { params: { did, since: rev }, as: "stream" }),
 			);
-			const [repoStream, toBufferStream] = stream.tee();
+			// split into two streams
+			const [repoStream, carStream] = stream.tee();
 
-			await using repo = RepoReader.fromStream(repoStream);
-			for await (const { collection, rkey, record } of repo) {
-				if (collections.includes(collection) && collection in this.processors) {
-					const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
+			await Promise.allSettled([
+				(async () => { // first stream is used to parse out records
+					await using repo = RepoReader.fromStream(repoStream);
+					for await (const { collection, rkey, record } of repo) {
+						if (collections.includes(collection) && collection in this.processors) {
+							const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
 
-					this.progress.incrementTotal(collection);
+							this.progress.incrementTotal(collection);
 
-					if (collection === "app.bsky.feed.post") {
-						if (isOwnRepo) {
-							this.processors[collection](uri, record, { reason: "self" });
-						} else {
-							this.processors[collection](uri, record, { reason: "by_follow" });
+							if (collection === "app.bsky.feed.post") {
+								if (isOwnRepo) {
+									this.processors[collection](uri, record, { reason: "self" });
+								} else {
+									this.processors[collection](uri, record, { reason: "by_follow" });
+								}
+							} else {
+								this.processors[collection](uri, record);
+							}
 						}
-					} else {
-						this.processors[collection](uri, record);
 					}
-				}
-			}
-
-			const repoBytes = new Uint8Array(await arrayBuffer(toBufferStream));
-			const latestRev = getRepoRev(repoBytes);
-			if (latestRev) await this.db.setRepoRev(did, latestRev);
+				})(),
+				(async () => { // second stream is just used to get the repo rev
+					if (isOwnRepo) return;
+					await using car = CarReader.fromStream(carStream);
+					const rootCid = (await car.roots())[0].$link;
+					for await (const entry of car) {
+						if (toCidLink(entry.cid).$link === rootCid) {
+							const decoded = decodeCbor(entry.bytes);
+							if (!isCommit(decoded)) break;
+							await this.db.setRepoRev(did, decoded.rev);
+							break;
+						}
+					}
+				})(),
+			]);
 		} catch (e) {
-			console.error(`failed to process repo ${did}: ${e}`);
+			console.error(`failed to process repo ${did}: ${errorToString(e)}`);
 		}
 	}
 
@@ -177,161 +211,136 @@ export class Backfill {
 		uri: ResourceUri,
 		{ inclusion, record, threadView, depth = 0 }: ProcessPostOptions,
 	): Promise<void> {
-		try {
-			this.progress.incrementTotal("posts");
+		if (depth > this.maxDepth) return;
 
-			if (depth > this.maxDepth) return;
+		const uriHash = h32(uri);
+		if (this.seenPosts.has(uriHash)) return;
 
-			const { repo, rkey } = parseAtUri(uri);
-			if (this.seenPosts.has(`${repo}/${rkey}`)) return;
-			this.seenPosts.add(`${repo}/${rkey}`);
-
-			if (!record) {
-				if (threadView && is(AppBskyFeedPost.mainSchema, threadView.post.record)) {
-					record = threadView.post.record;
+		if (!record) {
+			try {
+				({ record, threadView } = await this.fetchPost(uri, threadView));
+			} catch (e) {
+				if (e instanceof DOMException && e.name === "AbortError") {
+					throw e; // handled by BackgroundQueue
 				} else {
-					try {
-						const { thread } = await this.xrpc.queryNoRetry(
-							PUBLIC_APPVIEW_URL,
-							(c) => c.get("app.bsky.feed.getPostThread", { params: { uri } }),
-						);
-						if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) {
-							throw new Error(`invalid thread view for ${uri}`);
-						}
-						threadView = thread;
-						if (!is(AppBskyFeedPost.mainSchema, threadView.post.record)) {
-							throw new Error(`invalid post record for ${uri}`);
-						}
-						record = threadView.post.record;
-					} catch {
-						const res = await this.xrpc.queryByDid(
-							repo,
-							(c) =>
-								c.get("com.atproto.repo.getRecord", {
-									params: { collection: "app.bsky.feed.post", repo, rkey },
-								}),
-						).catch((e) => {
-							console.error(`failed to fetch post record for ${uri}: ${e.message}`);
-							return null;
-						});
-						if (!res) return;
-						if (!is(AppBskyFeedPost.mainSchema, res.value)) {
-							throw new Error(`invalid post record for ${uri}`);
-						}
-						record = res.value;
-					}
+					console.error(`failed to fetch post record for ${uri}: ${errorToString(e)}`);
+					return;
 				}
 			}
+		}
 
-			const createdAt = toDateOrNull(record.createdAt)?.getTime();
-			if (!createdAt) throw new Error(`invalid post createdAt (${uri}): ${record.createdAt}`);
+		this.seenPosts.add(uriHash);
 
-			const altText = extractAltTexts(record.embed)?.map((alt, i) => `---image ${i + 1}---\n${alt}`)
-				.join("\n\n");
-			const embed = is(AppBskyEmbedExternal.mainSchema, record.embed)
-				? record.embed?.external
-				: null;
-			const quoted = is(AppBskyEmbedRecord.mainSchema, record.embed)
-				? record.embed.record.uri
-				: is(AppBskyEmbedRecordWithMedia.mainSchema, record.embed)
-				? record.embed.record.record.uri
-				: null;
+		const createdAt = toDateOrNull(record.createdAt)?.getTime();
+		if (!createdAt) throw new Error(`invalid post createdAt (${uri}): ${record.createdAt}`);
 
-			const post: Post = {
-				creator: repo,
-				rkey,
-				createdAt,
-				text: record.text,
-				altText,
-				embedUrl: embed?.uri,
-				embedTitle: embed?.title,
-				embedDescription: embed?.description,
-				replyParent: record.reply?.parent?.uri,
-				replyRoot: record.reply?.root?.uri,
-				quoted,
-				inclusionReason: inclusion.reason,
-				inclusionContext: inclusion.context,
-			};
-			await this.queueWritePost(post);
+		const altText = extractAltTexts(record.embed)?.map((alt, i) => `---image ${i + 1}---\n${alt}`)
+			.join("\n\n");
+		const embed = is(AppBskyEmbedExternal.mainSchema, record.embed) ? record.embed?.external : null;
+		const quoted = is(AppBskyEmbedRecord.mainSchema, record.embed)
+			? record.embed.record.uri
+			: is(AppBskyEmbedRecordWithMedia.mainSchema, record.embed)
+			? record.embed.record.record.uri
+			: null;
 
-			if (quoted) {
-				let quotedRecordView;
-				if (threadView) {
-					if (
-						is(AppBskyEmbedRecord.viewSchema, threadView.post.embed) &&
-						is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record)
-					) {
-						quotedRecordView = threadView.post.embed.record;
-					} else if (
-						is(AppBskyEmbedRecordWithMedia.viewSchema, threadView.post.embed) &&
-						is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record.record)
-					) {
-						quotedRecordView = threadView.post.embed.record.record;
-					}
+		const { repo, rkey } = parseAtUri(uri);
+
+		const post: Post = {
+			creator: repo,
+			rkey,
+			createdAt,
+			text: record.text,
+			altText,
+			embedUrl: embed?.uri,
+			embedTitle: embed?.title,
+			embedDescription: embed?.description,
+			replyParent: record.reply?.parent?.uri,
+			replyRoot: record.reply?.root?.uri,
+			quoted,
+			inclusionReason: inclusion.reason,
+			inclusionContext: inclusion.context,
+		};
+		this.queueWritePost(post);
+
+		if (quoted) {
+			let quotedRecordView;
+			if (threadView) {
+				if (
+					is(AppBskyEmbedRecord.viewSchema, threadView.post.embed) &&
+					is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record)
+				) {
+					quotedRecordView = threadView.post.embed.record;
+				} else if (
+					is(AppBskyEmbedRecordWithMedia.viewSchema, threadView.post.embed) &&
+					is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record.record)
+				) {
+					quotedRecordView = threadView.post.embed.record.record;
 				}
+			}
+			if (is(AppBskyFeedPost.mainSchema, quotedRecordView?.value)) {
 				this.postQueue.add(quoted, {
 					depth: depth + 1,
-					record: is(AppBskyFeedPost.mainSchema, quotedRecordView?.value)
-						? quotedRecordView.value
-						: undefined,
+					record: quotedRecordView.value,
 					inclusion: { reason: "quoted_by", context: uri },
 				});
 			}
+		}
 
-			if (record.reply) {
-				const rootThreadView = threadView
-					? tryExtractRootPostFromThreadView(threadView, record.reply.root.uri)
-					: null;
-				this.postQueue.add(record.reply.root.uri, {
-					depth, // navigating upthread then down to siblings should only add 1 to depth
-					threadView: rootThreadView ?? undefined,
-					inclusion: { reason: "same_thread_as", context: uri },
+		// if the post is a reply, queue the root
+		// but only if this post is the entrypoint to the thread
+		if (record.reply && inclusion.reason !== "same_thread_as") {
+			const rootThreadView = threadView
+				? tryExtractRootPostFromThreadView(threadView, record.reply.root.uri)
+				: null;
+			this.postQueue.add(record.reply.root.uri, {
+				depth, // navigating upthread then down to siblings should only add 1 to depth
+				threadView: rootThreadView ?? undefined,
+				inclusion: { reason: "same_thread_as", context: uri },
+			});
+		} else { // if the post is a top-level post, recursively queue its replies
+			if (!threadView) {
+				const { thread } = await this.xrpc.query(
+					PUBLIC_APPVIEW_URL,
+					(c) =>
+						c.get("app.bsky.feed.getPostThread", {
+							params: { uri, depth: 20 },
+							signal: AbortSignal.timeout(10_000),
+						}),
+				).catch((e) => {
+					console.error(`error fetching thread for ${uri}`, e);
+					return { thread: null };
 				});
-			} else {
-				if (!threadView) {
-					const { thread } = await this.xrpc.query(
-						PUBLIC_APPVIEW_URL,
-						(c) => c.get("app.bsky.feed.getPostThread", { params: { uri, depth: 20 } }),
-					).catch((e) => {
-						console.error(`error fetching thread for ${uri}`, e);
-						return { thread: null };
-					});
-					if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) return;
-					threadView = thread;
-				}
-
-				// for a thread with 50 replies, go up to 20 levels deep
-				// for a thread with 500 replies, go up to 4 levels deep
-				// in between, scale logarithmically
-				const maxReplyDepth = Math.round(
-					logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
-				);
-
-				const { postQueue } = this;
-				threadView.replies?.forEach((reply) =>
-					(function processReply(reply, replyDepth) {
-						if (replyDepth > maxReplyDepth) return;
-						if (
-							!is(AppBskyFeedDefs.threadViewPostSchema, reply) ||
-							!is(AppBskyFeedPost.mainSchema, reply.post.record)
-						) return;
-						postQueue.add(reply.post.uri, {
-							threadView: reply,
-							depth: depth + 1,
-							inclusion: { reason: "same_thread_as", context: uri },
-						});
-						reply.replies?.forEach(processReply, replyDepth + 1);
-					})(reply, 1)
-				);
+				if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) return;
+				threadView = thread;
 			}
-		} catch (e) {
-			console.warn(`failed to process post ${uri}`, e);
-		} finally {
-			this.progress.incrementCompleted("posts");
+
+			// for a thread with 50 replies, go up to 20 levels deep
+			// for a thread with 500 replies, go up to 4 levels deep
+			// in between, scale logarithmically
+			const maxReplyDepth = Math.round(
+				logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
+			);
+
+			const { postQueue } = this;
+			threadView.replies?.forEach((reply) =>
+				(function processReply(reply, replyDepth) {
+					if (replyDepth > maxReplyDepth) return;
+					if (
+						!is(AppBskyFeedDefs.threadViewPostSchema, reply) ||
+						!is(AppBskyFeedPost.mainSchema, reply.post.record)
+					) return;
+					postQueue.add(reply.post.uri, {
+						// threadView is available but unnecessary; replies don't use it
+						depth: depth + 1,
+						inclusion: { reason: "same_thread_as", context: uri },
+					});
+					reply.replies?.forEach(processReply, replyDepth + 1);
+				})(reply, 1)
+			);
 		}
 	}
 
-	async queueWritePost(post: Post): Promise<void> {
+	queueWritePost(post: Post) {
 		this.toWrite.push(post);
 		if (this.toWrite.length > WRITE_POSTS_BATCH_SIZE) void this.writePosts();
 	}
@@ -344,6 +353,61 @@ export class Backfill {
 		}
 	}
 
+	async fetchPost(
+		uri: ResourceUri,
+		threadView?: AppBskyFeedDefs.ThreadViewPost,
+	): Promise<{ record: AppBskyFeedPost.Main; threadView?: AppBskyFeedDefs.ThreadViewPost }> {
+		if (threadView && is(AppBskyFeedPost.mainSchema, threadView.post.record)) {
+			return { threadView, record: threadView.post.record };
+		}
+
+		// first try fetching thread view; gets us more info in one query
+		try {
+			const { thread } = await this.xrpc.queryNoRetry(
+				PUBLIC_APPVIEW_URL,
+				(c) =>
+					c.get("app.bsky.feed.getPostThread", {
+						params: { uri },
+						signal: AbortSignal.timeout(10_000),
+					}),
+			);
+			if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) {
+				throw new Error(`invalid thread view for ${uri}`);
+			}
+			if (!is(AppBskyFeedPost.mainSchema, thread.post.record)) {
+				throw new Error(`invalid post record for ${uri}`);
+			}
+			return { threadView: thread, record: thread.post.record };
+		} catch (e) {
+			// if the appview says a post doesn't exist, trust it
+			if (e instanceof ClientResponseError && e.error === "NotFound") throw e;
+			// if it's an AbortError, rethrow it to be handled by BackgroundQueue
+			if (e instanceof DOMException && e.name === "AbortError") throw e;
+			console.warn(
+				`failed to fetch thread view for ${uri}, falling back to getRecord: ${errorToString(e)}`,
+			);
+		}
+
+		// if that fails, fetch the post record directly
+		const { repo, rkey } = parseAtUri(uri);
+
+		const res = await this.xrpc.queryByDid(
+			repo,
+			(c) =>
+				c.get("com.atproto.repo.getRecord", {
+					params: { collection: "app.bsky.feed.post", repo, rkey },
+					signal: AbortSignal.timeout(15_000),
+				}),
+		);
+		if (!is(AppBskyFeedPost.mainSchema, res.value)) {
+			throw new Error(`invalid post record for ${uri}`);
+		}
+
+		return { threadView, record: res.value };
+	}
+
+	// generates text & alt text embeddings for each post then re-writes them to the db
+	// writing the same posts twice is way faster than blocking on generating embeddings
 	async generateEmbeddings(posts: Post[]) {
 		posts.forEach(() => this.progress.incrementTotal("embeddings"));
 		const [hasText, hasTextIndices] = posts.reduce<[Post[], number[]]>(
@@ -432,9 +496,23 @@ class ProgressTracker {
 		this.bars[key].update(this.progress[key].completed);
 	}
 
+	setCompleted(key: string | undefined, completed: number | ((prev: number) => number)) {
+		if (!key || !this.progress[key] || !this.bars[key]) return;
+		this.progress[key].completed = typeof completed === "number"
+			? completed
+			: completed(this.progress[key].completed);
+		this.bars[key].update(this.progress[key].completed);
+	}
+
 	incrementTotal(key: string | undefined) {
 		if (!key || !this.progress[key] || !this.bars[key]) return;
 		this.progress[key].total++;
+		this.bars[key].setTotal(this.progress[key].total);
+	}
+
+	setTotal(key: string | undefined, total: number | ((prev: number) => number)) {
+		if (!key || !this.progress[key] || !this.bars[key]) return;
+		this.progress[key].total = typeof total === "number" ? total : total(this.progress[key].total);
 		this.bars[key].setTotal(this.progress[key].total);
 	}
 
