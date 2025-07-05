@@ -155,6 +155,9 @@ export function cacheFetchHandler(
 		}
 
 		const url = new URL(pathname, service);
+
+		if (url.host === "atproto.brid.gy") throw new BridgyError();
+
 		// @ts-expect-error — RequestInit type mismatch between node and deno
 		const promise = _fetch(url, init);
 		fetchHandlerCache.set(cacheKey, promise);
@@ -162,4 +165,12 @@ export function cacheFetchHandler(
 		if (retryableStatusCodes.has(res.status)) fetchHandlerCache.delete(cacheKey);
 		return res;
 	};
+}
+
+class BridgyError extends Error {
+	override name = "BridgyError";
+	constructor() {
+		super();
+		this.message = "bridgy repo export not supported";
+	}
 }
