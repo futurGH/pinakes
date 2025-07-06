@@ -25,7 +25,7 @@ import {
 	tryExtractRootPostFromThreadView,
 } from "../util/util.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
-import { ClientResponseError } from "@atcute/client";
+import { Client, ClientResponseError } from "@atcute/client";
 import { toCidLink } from "@atcute/cid";
 import { decode as decodeCbor } from "@atcute/cbor";
 import { isCommit } from "@atcute/car/v4/repo-reader";
@@ -286,66 +286,99 @@ export class Backfill {
 			}
 		}
 
-		// if the post is a reply, queue the root
-		// but only if this post is the entrypoint to the thread
-		if (record.reply && inclusion.reason !== "same_thread_as") {
-			const rootThreadView = threadView
-				? tryExtractRootPostFromThreadView(threadView, record.reply.root.uri)
-				: null;
-			this.postQueue.add(record.reply.root.uri, {
-				depth, // navigating upthread then down to siblings should only add 1 to depth
-				threadView: rootThreadView ?? undefined,
-				inclusion: { reason: "same_thread_as", context: uri },
-			});
-		} else { // if the post is a top-level post, recursively queue its replies
-			if (!threadView) {
-				const { thread } = await this.xrpc.query(
-					PUBLIC_APPVIEW_URL,
-					(c) =>
-						c.get("app.bsky.feed.getPostThread", {
-							params: { uri, depth: 20 },
-							signal: AbortSignal.timeout(10_000),
-						}),
-				).catch((e) => {
-					console.error(`error fetching thread for ${uri}`, e);
-					return { thread: null };
+		// if the post is a reply, queue the root and/or its ancestors
+		if (record.reply) {
+			// but only if this post is the reason we're looking at this thread;
+			// we don't want to re-queue the root for every ancestor in between
+			if (inclusion.reason === "same_thread_as") return;
+
+			// if we have enough depth budget to navigate up to the root then down to its descendants,
+			// we can just queue the root and it'll handle the rest
+			if (depth + 1 < this.maxDepth) {
+				const rootThreadView = threadView
+					? tryExtractRootPostFromThreadView(threadView, record.reply.root.uri)
+					: null;
+				this.postQueue.add(record.reply.root.uri, {
+					depth: depth + 1,
+					threadView: rootThreadView ?? undefined,
+					inclusion: { reason: "same_thread_as", context: uri },
 				});
-				if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) return;
-				threadView = thread;
+				return;
 			}
+		}
 
-			// for a thread with 50 replies, go up to 20 levels deep
-			// for a thread with 500 replies, go up to 4 levels deep
-			// in between, scale logarithmically
-			const maxReplyDepth = Math.round(
-				logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
-			);
+		// otherwise, either the post is a top-level post or there isn't enough depth budget to navigate to siblings & descendants
+		// in which case we'll just queue up replies and, if the post itself is a reply, any ancestors
+		if (!threadView) {
+			const { thread } = await this.xrpc.query(
+				PUBLIC_APPVIEW_URL,
+				this.getPostThreadQuery(uri),
+			).catch((e) => {
+				console.error(`error fetching thread for ${uri}`, e);
+				return { thread: null };
+			});
+			if (is(AppBskyFeedDefs.threadViewPostSchema, thread)) threadView = thread;
+		}
 
-			const { postQueue } = this;
-			threadView.replies?.forEach((reply) =>
-				(function processReply(reply, replyDepth) {
-					if (replyDepth > maxReplyDepth) return;
-					if (
-						!is(AppBskyFeedDefs.threadViewPostSchema, reply) ||
-						!is(AppBskyFeedPost.mainSchema, reply.post.record)
-					) return;
-					postQueue.add(reply.post.uri, {
-						// threadView is available but unnecessary; replies don't use it
+		// if we couldn't get the thread or it was invalid, just queue up the parent & root uris if we have them
+		if (!threadView) {
+			if (record.reply?.parent) {
+				this.postQueue.add(record.reply.parent.uri, {
+					depth: depth + 1,
+					inclusion: { reason: "same_thread_as", context: uri },
+				});
+			}
+			if (record.reply?.root) {
+				this.postQueue.add(record.reply.root.uri, {
+					depth: depth + 1,
+					inclusion: { reason: "same_thread_as", context: uri },
+				});
+			}
+			return;
+		}
+
+		if (threadView.parent) {
+			let parent: unknown = threadView.parent;
+			while (parent) {
+				if (is(AppBskyFeedDefs.threadViewPostSchema, parent)) {
+					this.postQueue.add(parent.post.uri, {
+						depth: depth + 1,
+						threadView: parent,
+						inclusion: { reason: "same_thread_as", context: uri },
+					});
+					parent = parent.parent;
+				} else if (is(AppBskyFeedDefs.blockedPostSchema, parent)) { // we'll fetch the record anyways
+					this.postQueue.add(parent.uri, {
 						depth: depth + 1,
 						inclusion: { reason: "same_thread_as", context: uri },
 					});
-					reply.replies?.forEach(processReply, replyDepth + 1);
-				})(reply, 1)
-			);
+				} else {
+					break;
+				}
+			}
 		}
+
+		// for a thread with 50 replies, go up to 20 levels deep
+		// for a thread with 500 replies, go up to 4 levels deep
+		// in between, scale logarithmically
+		const maxThreadDepth = Math.round(
+			logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
+		);
+
+		this.processPostReplies({
+			post: threadView,
+			sourceUri: uri,
+			backfillDepth: depth,
+			maxThreadDepth,
+		});
 	}
 
-	queueWritePost(post: Post) {
+	private queueWritePost(post: Post) {
 		this.toWrite.push(post);
 		if (this.toWrite.length > WRITE_POSTS_BATCH_SIZE) void this.writePosts();
 	}
 
-	async writePosts(): Promise<void> {
+	private async writePosts(): Promise<void> {
 		while (this.toWrite.length > 0) {
 			const batch = this.toWrite.splice(0, WRITE_POSTS_BATCH_SIZE);
 			await this.db.insertPosts(batch).catch((e) => console.error("error inserting posts:", e));
@@ -353,7 +386,7 @@ export class Backfill {
 		}
 	}
 
-	async fetchPost(
+	private async fetchPost(
 		uri: ResourceUri,
 		threadView?: AppBskyFeedDefs.ThreadViewPost,
 	): Promise<{ record: AppBskyFeedPost.Main; threadView?: AppBskyFeedDefs.ThreadViewPost }> {
@@ -365,11 +398,7 @@ export class Backfill {
 		try {
 			const { thread } = await this.xrpc.queryNoRetry(
 				PUBLIC_APPVIEW_URL,
-				(c) =>
-					c.get("app.bsky.feed.getPostThread", {
-						params: { uri },
-						signal: AbortSignal.timeout(10_000),
-					}),
+				this.getPostThreadQuery(uri),
 			);
 			if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) {
 				throw new Error(`invalid thread view for ${uri}`);
@@ -404,6 +433,45 @@ export class Backfill {
 		}
 
 		return { threadView, record: res.value };
+	}
+
+	private processPostReplies(
+		{
+			post,
+			sourceUri,
+			backfillDepth,
+			threadDepth = 1,
+			maxThreadDepth = 20,
+		}: {
+			post:
+				| AppBskyFeedDefs.ThreadViewPost
+				| AppBskyFeedDefs.NotFoundPost
+				| AppBskyFeedDefs.BlockedPost;
+			sourceUri: string;
+			backfillDepth: number;
+			threadDepth?: number;
+			maxThreadDepth?: number;
+		},
+	) {
+		if (threadDepth > maxThreadDepth) return;
+		if (
+			!is(AppBskyFeedDefs.threadViewPostSchema, post) ||
+			!is(AppBskyFeedPost.mainSchema, post.post.record)
+		) return;
+		this.postQueue.add(post.post.uri, {
+			// the thread view is likely available but unnecessary; replies don't use it
+			depth: backfillDepth + 1,
+			inclusion: { reason: "same_thread_as", context: sourceUri },
+		});
+		post.replies?.forEach((reply) =>
+			this.processPostReplies({
+				post: reply,
+				sourceUri,
+				backfillDepth,
+				threadDepth: threadDepth + 1,
+				maxThreadDepth,
+			})
+		);
 	}
 
 	// generates text & alt text embeddings for each post then re-writes them to the db
@@ -443,6 +511,12 @@ export class Backfill {
 			posts.forEach(() => this.progress.incrementCompleted("embeddings"));
 		}
 	}
+
+	private getPostThreadQuery = (uri: ResourceUri) => (client: Client) =>
+		client.get("app.bsky.feed.getPostThread", {
+			params: { uri, depth: 20, parentHeight: 20 },
+			signal: AbortSignal.timeout(10_000),
+		});
 
 	processors: Record<
 		string,
