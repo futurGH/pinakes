@@ -58,14 +58,14 @@ export class Backfill {
 			this.processPost(uri, options).finally(() =>
 				this.progress.incrementCompleted(sourceCollection)
 			),
-		{ softConcurrency: 25, hardConcurrency: 100 },
+		{ softConcurrency: 25, hardConcurrency: 100, maxQueueSize: 100_000 },
 	);
 	repoQueue = new BackgroundQueue(
 		(did: Did, collections?: string[]) =>
 			this.processRepo(did, collections).finally(() =>
 				this.progress.incrementCompleted("app.bsky.graph.follow")
 			),
-		{ softConcurrency: 10, hardConcurrency: 20 },
+		{ softConcurrency: 10, hardConcurrency: 20, maxQueueSize: 1000 },
 	);
 	embeddingsQueue = new BackgroundQueue(
 		(posts: Post[]) =>
@@ -177,12 +177,12 @@ export class Backfill {
 
 							if (collection === "app.bsky.feed.post") {
 								if (isOwnRepo) {
-									this.processors[collection](uri, record, { reason: "self" });
+									await this.processors[collection](uri, record, { reason: "self" });
 								} else {
-									this.processors[collection](uri, record, { reason: "by_follow" });
+									await this.processors[collection](uri, record, { reason: "by_follow" });
 								}
 							} else {
-								this.processors[collection](uri, record);
+								await this.processors[collection](uri, record);
 							}
 						}
 					}
@@ -280,7 +280,7 @@ export class Backfill {
 				}
 			}
 			if (is(AppBskyFeedPost.mainSchema, quotedRecordView?.value)) {
-				this.postQueue.add(quoted, {
+				await this.postQueue.add(quoted, {
 					depth: depth + 1,
 					record: quotedRecordView.value,
 					inclusion: { reason: "quoted_by", context: uri },
@@ -301,7 +301,7 @@ export class Backfill {
 			// if we have enough depth budget to navigate up to the root then down to its descendants,
 			// we can just queue the root and it'll handle the rest
 			if (depth + 1 < this.maxDepth) {
-				this.postQueue.add(record.reply.root.uri, {
+				await this.postQueue.add(record.reply.root.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
 				});
@@ -324,18 +324,18 @@ export class Backfill {
 
 		// if we couldn't get the thread or it was invalid, just queue up the parent & root uris if we have them
 		if (!threadView) {
-			if (record.reply?.parent) {
+			await Promise.allSettled([
+				record.reply?.parent &&
 				this.postQueue.add(record.reply.parent.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
-				});
-			}
-			if (record.reply?.root) {
+				}),
+				record.reply?.root &&
 				this.postQueue.add(record.reply.root.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
-				});
-			}
+				}),
+			]);
 			return;
 		}
 
@@ -343,7 +343,7 @@ export class Backfill {
 			let parent: unknown = threadView.parent;
 			while (parent) {
 				if (is(AppBskyFeedDefs.threadViewPostSchema, parent)) {
-					this.postQueue.add(parent.post.uri, {
+					await this.postQueue.add(parent.post.uri, {
 						// only pass in record for non-root ancestors, as the root will have to fetch threadView for replies anyways
 						// and we know that call won't just fall back to getRecord because we've just checked that the post exists
 						record: parent.post.uri !== post.replyRoot &&
@@ -355,7 +355,7 @@ export class Backfill {
 					});
 					parent = parent.parent;
 				} else if (is(AppBskyFeedDefs.blockedPostSchema, parent)) {
-					this.postQueue.add(parent.uri, {
+					await this.postQueue.add(parent.uri, {
 						depth: depth + 1,
 						inclusion: { reason: "ancestor_of", context: uri },
 					});
@@ -372,7 +372,7 @@ export class Backfill {
 			logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
 		);
 
-		this.processPostReplies({
+		await this.processPostReplies({
 			post: threadView,
 			sourceUri: uri,
 			backfillDepth: depth,
@@ -442,7 +442,7 @@ export class Backfill {
 		return { threadView, record: res.value };
 	}
 
-	private processPostReplies(
+	private async processPostReplies(
 		{
 			post,
 			sourceUri,
@@ -465,20 +465,20 @@ export class Backfill {
 			!is(AppBskyFeedDefs.threadViewPostSchema, post) ||
 			!is(AppBskyFeedPost.mainSchema, post.post.record)
 		) return;
-		this.postQueue.add(post.post.uri, {
+		await this.postQueue.add(post.post.uri, {
 			// the thread view is available but unnecessary to pass in; descendants don't use it
 			depth: backfillDepth + 1,
 			inclusion: { reason: "descendant_of", context: sourceUri },
 		});
-		post.replies?.forEach((reply) =>
-			this.processPostReplies({
+		for (const reply of post.replies ?? []) {
+			await this.processPostReplies({
 				post: reply,
 				sourceUri,
 				backfillDepth,
 				threadDepth: threadDepth + 1,
 				maxThreadDepth,
-			})
-		);
+			});
+		}
 	}
 
 	// generates text & alt text embeddings for each post then re-writes them to the db
@@ -527,29 +527,29 @@ export class Backfill {
 
 	processors: Record<
 		string,
-		(uri: ResourceUri, record: unknown, inclusion?: PostInclusion) => void
+		(uri: ResourceUri, record: unknown, inclusion?: PostInclusion) => Promise<void>
 	> = {
-		"app.bsky.feed.post": (uri, record, inclusion) => {
+		"app.bsky.feed.post": async (uri, record, inclusion) => {
 			if (!is(AppBskyFeedPost.mainSchema, record)) return;
 			if (!inclusion) throw new Error("inclusion reason is required for app.bsky.feed.post");
-			this.postQueue.add(uri, { record, inclusion }, "app.bsky.feed.post");
+			await this.postQueue.add(uri, { record, inclusion }, "app.bsky.feed.post");
 		},
-		"app.bsky.feed.repost": (uri, record) => {
+		"app.bsky.feed.repost": async (uri, record) => {
 			if (!is(AppBskyFeedRepost.mainSchema, record)) return;
 			const { repo: reposter } = parseAtUri(uri);
-			this.postQueue.add(record.subject.uri, {
+			await this.postQueue.add(record.subject.uri, {
 				inclusion: { reason: "reposted_by", context: reposter },
 			}, "app.bsky.feed.repost");
 		},
-		"app.bsky.feed.like": (_uri, record) => {
+		"app.bsky.feed.like": async (_uri, record) => {
 			if (!is(AppBskyFeedLike.mainSchema, record)) return;
-			this.postQueue.add(record.subject.uri, {
+			await this.postQueue.add(record.subject.uri, {
 				inclusion: { reason: "liked_by_self" },
 			}, "app.bsky.feed.like");
 		},
-		"app.bsky.graph.follow": (_uri, record) => {
+		"app.bsky.graph.follow": async (_uri, record) => {
 			if (!is(AppBskyGraphFollow.mainSchema, record)) return;
-			this.repoQueue.add(record.subject);
+			await this.repoQueue.add(record.subject);
 		},
 	};
 }
