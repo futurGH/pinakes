@@ -12,7 +12,7 @@ import {
 	AppBskyGraphFollow,
 } from "@atcute/bluesky";
 import type {} from "@atcute/atproto";
-import type { Did, ResourceUri } from "@atcute/lexicons/syntax";
+import { type Did, isTid, type ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
 import { CarReader, RepoReader } from "@atcute/car/v4";
 import { MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
@@ -154,14 +154,19 @@ export class Backfill {
 		did: Did,
 		collections = ["app.bsky.feed.post", "app.bsky.feed.repost"], // for anyone but the user, only process posts and reposts
 	): Promise<void> {
+		const collectionSet = new Set(collections);
 		try {
 			const isOwnRepo = did === this.userDid;
-			// always fetch full repo for self
-			const rev = isOwnRepo ? "" : await this.db.getRepoRev(did);
+			const rev = await this.db.getRepoRev(did);
 
 			const stream = await this.xrpc.queryByDid(
 				did,
-				(c) => c.get("com.atproto.sync.getRepo", { params: { did, since: rev }, as: "stream" }),
+				(c) =>
+					c.get("com.atproto.sync.getRepo", {
+						// always fetch full repo for self, we filter based on collection later
+						params: { did, since: isOwnRepo ? undefined : rev },
+						as: "stream",
+					}),
 			);
 			// split into two streams
 			const [repoStream, carStream] = stream.tee();
@@ -170,7 +175,14 @@ export class Backfill {
 				(async () => { // first stream is used to parse out records
 					await using repo = RepoReader.fromStream(repoStream);
 					for await (const { collection, rkey, record } of repo) {
-						if (collections.includes(collection) && collection in this.processors) {
+						if (collectionSet.has(collection) && collection in this.processors) {
+							// the user's own likes/posts/reposts prior to the last known rev can be ignored
+							// but follows should always be processed in full, as we don't know whether they've created new records
+							// for repos that aren't the user's own, this is already handled by `since: rev`
+							if (isOwnRepo && isTid(rev) && rkey < rev && collection !== "app.bsky.graph.follow") {
+								return;
+							}
+
 							const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
 
 							this.progress.incrementTotal(collection);
@@ -188,7 +200,6 @@ export class Backfill {
 					}
 				})(),
 				(async () => { // second stream is just used to get the repo rev
-					if (isOwnRepo) return;
 					await using car = CarReader.fromStream(carStream);
 					const rootCid = (await car.roots())[0].$link;
 					for await (const entry of car) {
