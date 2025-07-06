@@ -1,4 +1,5 @@
 import { buildCommand, numberParser } from "@stricli/core";
+import pc from "picocolors";
 import type { AppContext } from "../context.ts";
 import { Backfill, MAX_DEPTH } from "../lib/backfill.ts";
 
@@ -38,7 +39,9 @@ async function backfillCommandImpl(
 
 	if (!embeddings) {
 		console.warn(
-			"backfilling without generating embeddings; you can run `pinakes embeddings` later to generate embeddings",
+			`backfilling without generating embeddings; you can run ${
+				pc.green("`pinakes embeddings`")
+			} later to generate embeddings`,
 		);
 	}
 

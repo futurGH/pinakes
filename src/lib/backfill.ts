@@ -109,7 +109,11 @@ export class Backfill {
 		// post count scales massively with follows
 		if (this.maxDepth === MAX_DEPTH && (followsCount ?? 0) > MANY_FOLLOWS_THRESHOLD) {
 			console.warn(
-				`high follow count detected, reducing search depth from ${MAX_DEPTH} to ${MANY_FOLLOWS_MAX_DEPTH} — pass the --depth flag to override`,
+				`${
+					pc.blue("high follow count detected!")
+				} reducing search depth from ${MAX_DEPTH} to ${MANY_FOLLOWS_MAX_DEPTH} — pass the ${
+					pc.green("--depth")
+				} flag to override`,
 			);
 			this.maxDepth = MANY_FOLLOWS_MAX_DEPTH;
 		}
@@ -120,11 +124,11 @@ export class Backfill {
 			console.log("loaded embeddings model");
 		}
 
-		console.log(`backfilling index for user ${handle}...`);
 		const startTime = performance.now();
 		{
 			using _logging = this.progress.start(); // auto resets console.* at the end of the block
 
+			console.log(`fetching repo for ${pc.underline(handle)}...`);
 			await this.processRepo(
 				this.userDid as Did,
 				new Set([
@@ -248,6 +252,7 @@ export class Backfill {
 				}
 			}
 		}
+		if (!record) return;
 
 		this.seenPosts.add(uriHash);
 
@@ -414,10 +419,13 @@ export class Backfill {
 	private async fetchPost(
 		uri: ResourceUri,
 		threadView?: AppBskyFeedDefs.ThreadViewPost,
-	): Promise<{ record: AppBskyFeedPost.Main; threadView?: AppBskyFeedDefs.ThreadViewPost }> {
+	): Promise<{ record?: AppBskyFeedPost.Main; threadView?: AppBskyFeedDefs.ThreadViewPost }> {
 		if (threadView && is(AppBskyFeedPost.mainSchema, threadView.post.record)) {
 			return { threadView, record: threadView.post.record };
 		}
+
+		const { repo, collection, rkey } = parseAtUri(uri);
+		if (collection !== "app.bsky.feed.post") return {};
 
 		// first try fetching thread view; gets us more info in one query
 		try {
@@ -430,7 +438,7 @@ export class Backfill {
 					const threadView = is(AppBskyFeedDefs.threadViewPostSchema, thread) ? thread : undefined;
 					return { threadView, record: thread.post.record };
 				} else {
-					throw new Error("invalid post record in thread view");
+					return {}; // if a valid thread view was returned, containing an invalid post record, don't bother to fetch it
 				}
 			} else if (thread.$type === "app.bsky.feed.defs#blockedPost") {
 				// fall through to getRecord
@@ -444,16 +452,12 @@ export class Backfill {
 			if (e instanceof ClientResponseError && e.error === "NotFound") throw e;
 			// if it's an AbortError, rethrow it to be handled by BackgroundQueue
 			if (e instanceof DOMException && e.name === "AbortError") throw e;
-			// if a valid thread view was returned, containing an invalid post record, don't bother to fetch it
-			if (e instanceof Error && e.message === "invalid post record in thread view") throw e;
 			console.warn(
 				`failed to fetch thread view for ${uri}, falling back to getRecord: ${errorToString(e)}`,
 			);
 		}
 
 		// if that fails, fetch the post record directly
-		const { repo, rkey } = parseAtUri(uri);
-
 		const res = await this.xrpc.queryByDid(
 			repo,
 			(c) =>
@@ -613,19 +617,18 @@ class ProgressTracker {
 
 	start() {
 		for (const key of this.keys) {
-			this.progress[key] = { completed: 0, total: 0 };
+			const progress = { completed: 0, total: 0 };
+			this.progress[key] = progress;
 			this.bars[key] = this.multibar.create(100, 0, { key }, { clearOnComplete: false });
-		}
 
-		for (const key in this.speeds) {
+			const speeds = this.speeds;
 			let prevCompleted = 0;
 			setTimeout(
-				function updateSpeed(this: ProgressTracker) {
-					const currentCompleted = this.progress[key].completed;
-					this.speeds[key] = currentCompleted - prevCompleted;
-					prevCompleted = currentCompleted;
+				function updateSpeed() {
+					speeds[key] = progress.completed - prevCompleted;
+					prevCompleted = progress.completed;
 					setTimeout(updateSpeed, 1000);
-				}.bind(this),
+				},
 				1000,
 			);
 		}
@@ -659,8 +662,8 @@ class ProgressTracker {
 		const r = BarPresets.shades_classic.barIncompleteChar;
 
 		const bar = cristal(`${c.repeat(completeSize)}${r.repeat(remainingSize)}`);
-		const speed = `${this.speeds[payload.key] ?? 0}`.padStart(3, "0");
+		const speed = this.speeds[payload.key]?.toString().padStart(2, "0") ?? "0";
 
-		return `${payload.key} ${bar} ${params.value}/${params.total} - ${speed}`;
+		return `${payload.key} ${bar} ${params.value}/${params.total} - ${speed} per sec`;
 	};
 }
