@@ -425,18 +425,27 @@ export class Backfill {
 				PUBLIC_APPVIEW_URL,
 				this.getPostThreadQuery(uri),
 			);
-			if (!is(AppBskyFeedDefs.threadViewPostSchema, thread)) {
-				throw new Error(`invalid thread view for ${uri}`);
+			if (thread.$type === "app.bsky.feed.defs#threadViewPost") {
+				if (is(AppBskyFeedPost.mainSchema, thread?.post?.record)) {
+					const threadView = is(AppBskyFeedDefs.threadViewPostSchema, thread) ? thread : undefined;
+					return { threadView, record: thread.post.record };
+				} else {
+					throw new Error("invalid post record in thread view");
+				}
+			} else if (thread.$type === "app.bsky.feed.defs#blockedPost") {
+				// fall through to getRecord
+			} else if (thread.$type === "app.bsky.feed.defs#notFoundPost") {
+				throw new ClientResponseError({ status: 404, data: { error: "NotFound" } });
+			} else {
+				throw new Error(`unexpected thread type: ${(thread as any).$type}`);
 			}
-			if (!is(AppBskyFeedPost.mainSchema, thread.post.record)) {
-				throw new Error(`invalid post record for ${uri}`);
-			}
-			return { threadView: thread, record: thread.post.record };
 		} catch (e) {
 			// if the appview says a post doesn't exist, trust it
 			if (e instanceof ClientResponseError && e.error === "NotFound") throw e;
 			// if it's an AbortError, rethrow it to be handled by BackgroundQueue
 			if (e instanceof DOMException && e.name === "AbortError") throw e;
+			// if a valid thread view was returned, containing an invalid post record, don't bother to fetch it
+			if (e instanceof Error && e.message === "invalid post record in thread view") throw e;
 			console.warn(
 				`failed to fetch thread view for ${uri}, falling back to getRecord: ${errorToString(e)}`,
 			);
