@@ -15,7 +15,7 @@ import type {} from "@atcute/atproto";
 import { type Did, isTid, type ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
 import { CarReader } from "@atcute/car/v4";
-import { MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
+import { GenericFormatter, MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
 import {
 	errorToString,
 	extractAltTexts,
@@ -29,6 +29,8 @@ import { decode as decodeCbor } from "@atcute/cbor";
 import { collectBlock, isCommit, readBlock, walkMstEntries } from "@atcute/car/v4/repo-reader";
 import xxhash from "xxhash-wasm";
 import assert from "node:assert";
+import { cristal } from "gradient-string";
+import pc from "picocolors";
 
 const { h32 } = await xxhash();
 
@@ -577,26 +579,20 @@ interface ProcessPostOptions {
 }
 
 class ProgressTracker {
+	multibar: MultiBar;
 	progress: Record<string, { completed: number; total: number }> = {};
-	multibar = new MultiBar(
-		{ format: " {key}  {bar}  {value}/{total}", fps: 30 },
-		BarPresets.shades_classic,
-	);
 	bars: Record<string, SingleBar> = {};
+	speeds: Record<string, number> = {};
 
-	constructor(private keys: string[]) {}
+	constructor(private keys: string[]) {
+		this.multibar = new MultiBar(
+			{ format: this.formatter, forceRedraw: true },
+		);
+	}
 
 	incrementCompleted(key: string | undefined) {
 		if (!key || !this.progress[key] || !this.bars[key]) return;
 		this.progress[key].completed++;
-		this.bars[key].update(this.progress[key].completed);
-	}
-
-	setCompleted(key: string | undefined, completed: number | ((prev: number) => number)) {
-		if (!key || !this.progress[key] || !this.bars[key]) return;
-		this.progress[key].completed = typeof completed === "number"
-			? completed
-			: completed(this.progress[key].completed);
 		this.bars[key].update(this.progress[key].completed);
 	}
 
@@ -606,22 +602,30 @@ class ProgressTracker {
 		this.bars[key].setTotal(this.progress[key].total);
 	}
 
-	setTotal(key: string | undefined, total: number | ((prev: number) => number)) {
-		if (!key || !this.progress[key] || !this.bars[key]) return;
-		this.progress[key].total = typeof total === "number" ? total : total(this.progress[key].total);
-		this.bars[key].setTotal(this.progress[key].total);
-	}
-
 	start() {
 		for (const key of this.keys) {
 			this.progress[key] = { completed: 0, total: 0 };
 			this.bars[key] = this.multibar.create(100, 0, { key }, { clearOnComplete: false });
 		}
 
+		for (const key in this.speeds) {
+			let prevCompleted = 0;
+			setTimeout(
+				function updateSpeed(this: ProgressTracker) {
+					const currentCompleted = this.progress[key].completed;
+					this.speeds[key] = currentCompleted - prevCompleted;
+					prevCompleted = currentCompleted;
+					setTimeout(updateSpeed, 1000);
+				}.bind(this),
+				1000,
+			);
+		}
+
 		const { multibar } = this;
 		const consoleLog = console.log, consoleWarn = console.warn, consoleError = console.error;
-		console.log = console.warn = console.error = (...data: string[]) =>
-			multibar.log(data.join(" ") + "\n");
+		console.log = (...data: string[]) => multibar.log(data.join(" ") + "\n");
+		console.warn = (...data: string[]) => console.log(pc.yellow(data.join(" ")));
+		console.error = (...data: string[]) => console.log(pc.red(data.join(" ")));
 
 		return {
 			[Symbol.dispose]() {
@@ -632,4 +636,22 @@ class ProgressTracker {
 			},
 		};
 	}
+
+	private formatter: GenericFormatter = (
+		options,
+		params,
+		payload: { key: string },
+	) => {
+		const barSize = options.barsize ?? 40;
+		const completeSize = Math.round(barSize * params.value / params.total);
+		const remainingSize = barSize - completeSize;
+
+		const c = BarPresets.shades_classic.barCompleteChar;
+		const r = BarPresets.shades_classic.barIncompleteChar;
+
+		const bar = cristal(`${c.repeat(completeSize)}${r.repeat(remainingSize)}`);
+		const speed = `${this.speeds[payload.key] ?? 0}`.padStart(3, "0");
+
+		return `${payload.key} ${bar} ${params.value}/${params.total} - ${speed}`;
+	};
 }

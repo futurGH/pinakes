@@ -16,6 +16,7 @@
     "npm:@types/cli-progress@^3.11.6": "3.11.6",
     "npm:@types/node@*": "22.15.15",
     "npm:cli-progress@^3.12.0": "3.12.0",
+    "npm:gradient-string@3": "3.0.0",
     "npm:kysely-libsql@~0.7.1": "0.7.1_kysely@0.28.2",
     "npm:kysely@~0.28.2": "0.28.2",
     "npm:picocolors@^1.1.1": "1.1.1",
@@ -576,6 +577,9 @@
         "undici-types"
       ]
     },
+    "@types/tinycolor2@1.4.6": {
+      "integrity": "sha512-iEN8J0BoMnsWBqjVbWH/c0G0Hh7O21lpR2/+PrvAVgWdzL7eexIFm4JN/Wn10PTcmNdtS6U67r499mlWMXOxNw=="
+    },
     "@types/ws@8.18.1": {
       "integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==",
       "dependencies": [
@@ -588,6 +592,9 @@
     "boolean@3.2.0": {
       "integrity": "sha512-d0II/GO9uf9lfUHH2BQsjxzRJZBdsjgsBiW4BvhWk/3qoKwQFjIDVN19PfX8F2D/r9PCMTtLWjYVCFrpeYUzsw==",
       "deprecated": true
+    },
+    "chalk@5.4.1": {
+      "integrity": "sha512-zgVZuo2WcZgfUEmsn6eO3kINexW8RAE4maiQ8QNs8CtpPCSyMiYsULR3HQYkm3w8FIA3SberyMJMSldGsW+U3w=="
     },
     "chownr@3.0.0": {
       "integrity": "sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g=="
@@ -708,6 +715,13 @@
     },
     "gopd@1.2.0": {
       "integrity": "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg=="
+    },
+    "gradient-string@3.0.0": {
+      "integrity": "sha512-frdKI4Qi8Ihp4C6wZNB565de/THpIaw3DjP5ku87M+N9rNSGmPTjfkq61SdRXB7eCaL8O1hkKDvf6CDMtOzIAg==",
+      "dependencies": [
+        "chalk",
+        "tinygradient"
+      ]
     },
     "graphemer@1.4.0": {
       "integrity": "sha512-EtKwoO6kxCL9WO5xipiHTZlSzBm7WLT627TqC/uVRd0HKmq8NXyebnNYxDoBi7wt8eTWrUrKXCOVaFq9x1kgag=="
@@ -947,6 +961,16 @@
         "yallist"
       ]
     },
+    "tinycolor2@1.6.0": {
+      "integrity": "sha512-XPaBkWQJdsf3pLKJV9p4qN/S+fm2Oj8AIPo1BTUhg5oxkvm9+SVEGFdhyOz7tTdUTfvxMiAs4sp6/eZO2Ew+pw=="
+    },
+    "tinygradient@1.1.5": {
+      "integrity": "sha512-8nIfc2vgQ4TeLnk2lFj4tRLvvJwEfQuabdsmvDdQPT0xlk9TaNtpGd6nNRxXoK6vQhN6RSzj+Cnp5tTQmpxmbw==",
+      "dependencies": [
+        "@types/tinycolor2",
+        "tinycolor2"
+      ]
+    },
     "tslib@2.8.1": {
       "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="
     },
@@ -1000,6 +1024,7 @@
         "npm:@stricli/core@^1.2.0",
         "npm:@types/cli-progress@^3.11.6",
         "npm:cli-progress@^3.12.0",
+        "npm:gradient-string@3",
         "npm:kysely-libsql@~0.7.1",
         "npm:kysely@~0.28.2",
         "npm:picocolors@^1.1.1",
