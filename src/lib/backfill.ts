@@ -14,7 +14,7 @@ import {
 import type {} from "@atcute/atproto";
 import { type Did, isTid, type ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
-import { CarReader, RepoReader } from "@atcute/car/v4";
+import { CarReader } from "@atcute/car/v4";
 import { MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
 import {
 	errorToString,
@@ -25,10 +25,10 @@ import {
 } from "../util/util.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
 import { Client, ClientResponseError } from "@atcute/client";
-import { toCidLink } from "@atcute/cid";
 import { decode as decodeCbor } from "@atcute/cbor";
-import { isCommit } from "@atcute/car/v4/repo-reader";
+import { collectBlock, isCommit, readBlock, walkMstEntries } from "@atcute/car/v4/repo-reader";
 import xxhash from "xxhash-wasm";
+import assert from "node:assert";
 
 const { h32 } = await xxhash();
 
@@ -61,7 +61,7 @@ export class Backfill {
 		{ softConcurrency: 25, hardConcurrency: 100, maxQueueSize: 100_000 },
 	);
 	repoQueue = new BackgroundQueue(
-		(did: Did, collections?: string[]) =>
+		(did: Did, collections?: Set<string>) =>
 			this.processRepo(did, collections).finally(() =>
 				this.progress.incrementCompleted("app.bsky.graph.follow")
 			),
@@ -123,12 +123,15 @@ export class Backfill {
 		{
 			using _logging = this.progress.start(); // auto resets console.* at the end of the block
 
-			await this.processRepo(this.userDid as Did, [
-				"app.bsky.feed.post",
-				"app.bsky.feed.repost",
-				"app.bsky.feed.like",
-				"app.bsky.graph.follow",
-			]);
+			await this.processRepo(
+				this.userDid as Did,
+				new Set([
+					"app.bsky.feed.post",
+					"app.bsky.feed.repost",
+					"app.bsky.feed.like",
+					"app.bsky.graph.follow",
+				]),
+			);
 			while (this.repoQueue.size > 0 || this.postQueue.size > 0 || this.embeddingsQueue.size > 0) {
 				await Promise.allSettled([
 					(async () => {
@@ -152,66 +155,68 @@ export class Backfill {
 
 	async processRepo(
 		did: Did,
-		collections = ["app.bsky.feed.post", "app.bsky.feed.repost"], // for anyone but the user, only process posts and reposts
+		collections = new Set(["app.bsky.feed.post", "app.bsky.feed.repost"]), // for anyone but the user, only process posts and reposts
 	): Promise<void> {
-		const collectionSet = new Set(collections);
 		try {
 			const isOwnRepo = did === this.userDid;
 			const rev = await this.db.getRepoRev(did);
 
-			const stream = await this.xrpc.queryByDid(
+			const repoBytes = await this.xrpc.queryByDid(
 				did,
 				(c) =>
 					c.get("com.atproto.sync.getRepo", {
 						// always fetch full repo for self, we filter based on collection later
 						params: { did, since: isOwnRepo ? undefined : rev },
-						as: "stream",
+						as: "bytes",
 					}),
 			);
-			// split into two streams
-			const [repoStream, carStream] = stream.tee();
 
-			await Promise.allSettled([
-				(async () => { // first stream is used to parse out records
-					await using repo = RepoReader.fromStream(repoStream);
-					for await (const { collection, rkey, record } of repo) {
-						if (collectionSet.has(collection) && collection in this.processors) {
-							// the user's own likes/posts/reposts prior to the last known rev can be ignored
-							// but follows should always be processed in full, as we don't know whether they've created new records
-							// for repos that aren't the user's own, this is already handled by `since: rev`
-							if (isOwnRepo && isTid(rev) && rkey < rev && collection !== "app.bsky.graph.follow") {
-								return;
-							}
+			const car = CarReader.fromUint8Array(repoBytes);
+			assert(
+				car.roots.length === 1,
+				`expected only 1 root in the car archive; got=${car.roots.length}`,
+			);
 
-							const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
+			const blockmap = collectBlock(car);
+			assert(
+				blockmap.size > 0,
+				`expected at least 1 block in the archive; got=${blockmap.size}`,
+			);
 
-							this.progress.incrementTotal(collection);
+			const commit = readBlock(blockmap, car.roots[0], isCommit);
+			await this.db.setRepoRev(did, commit.rev);
 
-							if (collection === "app.bsky.feed.post") {
-								if (isOwnRepo) {
-									await this.processors[collection](uri, record, { reason: "self" });
-								} else {
-									await this.processors[collection](uri, record, { reason: "by_follow" });
-								}
-							} else {
-								await this.processors[collection](uri, record);
-							}
-						}
+			for (const { key, cid } of walkMstEntries(blockmap, commit.data)) {
+				const [collection, rkey] = key.split("/");
+
+				if (!collections.has(collection) || !(collection in this.processors)) continue;
+
+				const carEntry = blockmap.get(cid.$link);
+				assert(carEntry != null, `cid not found in blockmap; cid=${cid}`);
+
+				const record = decodeCbor(carEntry.bytes);
+
+				// the user's own likes/posts/reposts prior to the last known rev can be ignored
+				// but follows should always be processed in full, as we don't know whether they've created new records
+				// for repos that aren't the user's own, this is already handled by `since: rev`
+				if (isOwnRepo && isTid(rev) && rkey < rev && collection !== "app.bsky.graph.follow") {
+					return;
+				}
+
+				const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
+
+				this.progress.incrementTotal(collection);
+
+				if (collection === "app.bsky.feed.post") {
+					if (isOwnRepo) {
+						await this.processors[collection](uri, record, { reason: "self" });
+					} else {
+						await this.processors[collection](uri, record, { reason: "by_follow" });
 					}
-				})(),
-				(async () => { // second stream is just used to get the repo rev
-					await using car = CarReader.fromStream(carStream);
-					const rootCid = (await car.roots())[0].$link;
-					for await (const entry of car) {
-						if (toCidLink(entry.cid).$link === rootCid) {
-							const decoded = decodeCbor(entry.bytes);
-							if (!isCommit(decoded)) break;
-							await this.db.setRepoRev(did, decoded.rev);
-							break;
-						}
-					}
-				})(),
-			]);
+				} else {
+					await this.processors[collection](uri, record);
+				}
+			}
 		} catch (e) {
 			console.error(`failed to process repo ${did}: ${errorToString(e)}`);
 		}
@@ -291,7 +296,7 @@ export class Backfill {
 				}
 			}
 			if (is(AppBskyFeedPost.mainSchema, quotedRecordView?.value)) {
-				await this.postQueue.add(quoted, {
+				void this.postQueue.add(quoted, {
 					depth: depth + 1,
 					record: quotedRecordView.value,
 					inclusion: { reason: "quoted_by", context: uri },
@@ -312,7 +317,7 @@ export class Backfill {
 			// if we have enough depth budget to navigate up to the root then down to its descendants,
 			// we can just queue the root and it'll handle the rest
 			if (depth + 1 < this.maxDepth) {
-				await this.postQueue.add(record.reply.root.uri, {
+				void this.postQueue.add(record.reply.root.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
 				});
@@ -335,18 +340,18 @@ export class Backfill {
 
 		// if we couldn't get the thread or it was invalid, just queue up the parent & root uris if we have them
 		if (!threadView) {
-			await Promise.allSettled([
-				record.reply?.parent &&
-				this.postQueue.add(record.reply.parent.uri, {
+			if (record.reply?.parent) {
+				void this.postQueue.add(record.reply.parent.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
-				}),
-				record.reply?.root &&
-				this.postQueue.add(record.reply.root.uri, {
+				});
+			}
+			if (record.reply?.root) {
+				void this.postQueue.add(record.reply.root.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
-				}),
-			]);
+				});
+			}
 			return;
 		}
 
@@ -354,7 +359,7 @@ export class Backfill {
 			let parent: unknown = threadView.parent;
 			while (parent) {
 				if (is(AppBskyFeedDefs.threadViewPostSchema, parent)) {
-					await this.postQueue.add(parent.post.uri, {
+					void this.postQueue.add(parent.post.uri, {
 						// only pass in record for non-root ancestors, as the root will have to fetch threadView for replies anyways
 						// and we know that call won't just fall back to getRecord because we've just checked that the post exists
 						record: parent.post.uri !== post.replyRoot &&
@@ -366,7 +371,7 @@ export class Backfill {
 					});
 					parent = parent.parent;
 				} else if (is(AppBskyFeedDefs.blockedPostSchema, parent)) {
-					await this.postQueue.add(parent.uri, {
+					void this.postQueue.add(parent.uri, {
 						depth: depth + 1,
 						inclusion: { reason: "ancestor_of", context: uri },
 					});
@@ -383,7 +388,7 @@ export class Backfill {
 			logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
 		);
 
-		await this.processPostReplies({
+		this.processPostReplies({
 			post: threadView,
 			sourceUri: uri,
 			backfillDepth: depth,
@@ -453,7 +458,7 @@ export class Backfill {
 		return { threadView, record: res.value };
 	}
 
-	private async processPostReplies(
+	private processPostReplies(
 		{
 			post,
 			sourceUri,
@@ -476,13 +481,13 @@ export class Backfill {
 			!is(AppBskyFeedDefs.threadViewPostSchema, post) ||
 			!is(AppBskyFeedPost.mainSchema, post.post.record)
 		) return;
-		await this.postQueue.add(post.post.uri, {
+		void this.postQueue.add(post.post.uri, {
 			// the thread view is available but unnecessary to pass in; descendants don't use it
 			depth: backfillDepth + 1,
 			inclusion: { reason: "descendant_of", context: sourceUri },
 		});
 		for (const reply of post.replies ?? []) {
-			await this.processPostReplies({
+			this.processPostReplies({
 				post: reply,
 				sourceUri,
 				backfillDepth,
