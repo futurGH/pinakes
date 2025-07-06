@@ -221,6 +221,8 @@ export class Backfill {
 			} catch (e) {
 				if (e instanceof DOMException && e.name === "AbortError") {
 					throw e; // handled by BackgroundQueue
+				} else if (e instanceof ClientResponseError && e.error === "NotFound") {
+					return; // logging this is just noise
 				} else {
 					console.error(`failed to fetch post record for ${uri}: ${errorToString(e)}`);
 					return;
