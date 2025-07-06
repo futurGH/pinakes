@@ -71,17 +71,6 @@ export function extractAltTexts(embed: AppBskyFeedPost.Main["embed"] | undefined
 	return altTexts;
 }
 
-export function tryExtractRootPostFromThreadView(
-	view: AppBskyFeedDefs.ThreadViewPost,
-	rootUri: string,
-): AppBskyFeedDefs.ThreadViewPost | null {
-	let parent = view;
-	while (is(AppBskyFeedDefs.threadViewPostSchema, parent.parent)) {
-		parent = parent.parent;
-	}
-	return parent.post.uri === rootUri ? parent : null;
-}
-
 export function formatException(exc: unknown): string {
 	if (exc instanceof AliasNotFoundError) {
 		return `no alias found for -${exc.input}`;

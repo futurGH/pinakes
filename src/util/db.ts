@@ -7,7 +7,8 @@ export type PostInclusionReason =
 	| "self"
 	| "liked_by_self"
 	| "reposted_by"
-	| "same_thread_as"
+	| "ancestor_of"
+	| "descendant_of"
 	| "quoted_by"
 	| "linked_by"
 	| "by_follow";

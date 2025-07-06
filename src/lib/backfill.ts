@@ -22,7 +22,6 @@ import {
 	logarithmicScale,
 	parseAtUri,
 	toDateOrNull,
-	tryExtractRootPostFromThreadView,
 } from "../util/util.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
 import { Client, ClientResponseError } from "@atcute/client";
@@ -286,29 +285,30 @@ export class Backfill {
 			}
 		}
 
+		// if this post is being processed as a descendant,
+		// its ancestors and descendants are already being queued
+		if (inclusion.reason === "descendant_of") return;
+
 		// if the post is a reply, queue the root and/or its ancestors
 		if (record.reply) {
 			// but only if this post is the reason we're looking at this thread;
 			// we don't want to re-queue the root for every ancestor in between
-			if (inclusion.reason === "same_thread_as") return;
+			if (inclusion.reason === "ancestor_of") return;
 
 			// if we have enough depth budget to navigate up to the root then down to its descendants,
 			// we can just queue the root and it'll handle the rest
 			if (depth + 1 < this.maxDepth) {
-				const rootThreadView = threadView
-					? tryExtractRootPostFromThreadView(threadView, record.reply.root.uri)
-					: null;
 				this.postQueue.add(record.reply.root.uri, {
+					// we could find the root's thread view and include it here but it'd be missing replies
 					depth: depth + 1,
-					threadView: rootThreadView ?? undefined,
-					inclusion: { reason: "same_thread_as", context: uri },
+					inclusion: { reason: "ancestor_of", context: uri },
 				});
 				return;
 			}
 		}
 
 		// otherwise, either the post is a top-level post or there isn't enough depth budget to navigate to siblings & descendants
-		// in which case we'll just queue up replies and, if the post itself is a reply, any ancestors
+		// in which case we'll fetch the thread so we can queue up replies and, if the post itself is a reply, any ancestors
 		if (!threadView) {
 			const { thread } = await this.xrpc.query(
 				PUBLIC_APPVIEW_URL,
@@ -325,13 +325,13 @@ export class Backfill {
 			if (record.reply?.parent) {
 				this.postQueue.add(record.reply.parent.uri, {
 					depth: depth + 1,
-					inclusion: { reason: "same_thread_as", context: uri },
+					inclusion: { reason: "ancestor_of", context: uri },
 				});
 			}
 			if (record.reply?.root) {
 				this.postQueue.add(record.reply.root.uri, {
 					depth: depth + 1,
-					inclusion: { reason: "same_thread_as", context: uri },
+					inclusion: { reason: "ancestor_of", context: uri },
 				});
 			}
 			return;
@@ -344,13 +344,13 @@ export class Backfill {
 					this.postQueue.add(parent.post.uri, {
 						depth: depth + 1,
 						threadView: parent,
-						inclusion: { reason: "same_thread_as", context: uri },
+						inclusion: { reason: "ancestor_of", context: uri },
 					});
 					parent = parent.parent;
 				} else if (is(AppBskyFeedDefs.blockedPostSchema, parent)) { // we'll fetch the record anyways
 					this.postQueue.add(parent.uri, {
 						depth: depth + 1,
-						inclusion: { reason: "same_thread_as", context: uri },
+						inclusion: { reason: "ancestor_of", context: uri },
 					});
 				} else {
 					break;
@@ -459,9 +459,9 @@ export class Backfill {
 			!is(AppBskyFeedPost.mainSchema, post.post.record)
 		) return;
 		this.postQueue.add(post.post.uri, {
-			// the thread view is likely available but unnecessary; replies don't use it
+			// the thread view is available but unnecessary to pass in; descendants don't use it
 			depth: backfillDepth + 1,
-			inclusion: { reason: "same_thread_as", context: sourceUri },
+			inclusion: { reason: "descendant_of", context: sourceUri },
 		});
 		post.replies?.forEach((reply) =>
 			this.processPostReplies({
