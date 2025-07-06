@@ -59,8 +59,6 @@ export class XRPCManager {
 		service: string,
 		fn: (client: Client) => Promise<T>,
 	): Promise<ExtractSuccessData<T>> {
-		if (service === "https://atproto.brid.gy") throw new Error("bridgy unsupported");
-
 		const client = this.getOrCreateClient(service);
 		return await ok(fn(client));
 	}
