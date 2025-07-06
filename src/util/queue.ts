@@ -51,6 +51,8 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 	}
 
 	async add(...args: T): Promise<void> {
+		this.emit("queued");
+
 		// wait for space if max queue size is reached
 		if (this._maxQueueSize && this.size >= this._maxQueueSize) {
 			await new Promise<void>((resolve) => {
@@ -59,7 +61,6 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 		}
 
 		this._queue.push(args);
-		this.emit("queued");
 		this._drain();
 	}
 
