@@ -208,13 +208,14 @@ export class Backfill {
 
 	async processPost(
 		uri: ResourceUri,
-		{ inclusion, record, threadView, depth = 0 }: ProcessPostOptions,
+		{ inclusion, record, depth = 0 }: ProcessPostOptions,
 	): Promise<void> {
 		if (depth > this.maxDepth) return;
 
 		const uriHash = h32(uri);
 		if (this.seenPosts.has(uriHash)) return;
 
+		let threadView: AppBskyFeedDefs.ThreadViewPost | undefined;
 		if (!record) {
 			try {
 				({ record, threadView } = await this.fetchPost(uri, threadView));
@@ -301,7 +302,6 @@ export class Backfill {
 			// we can just queue the root and it'll handle the rest
 			if (depth + 1 < this.maxDepth) {
 				this.postQueue.add(record.reply.root.uri, {
-					// we could find the root's thread view and include it here but it'd be missing replies
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
 				});
@@ -344,12 +344,17 @@ export class Backfill {
 			while (parent) {
 				if (is(AppBskyFeedDefs.threadViewPostSchema, parent)) {
 					this.postQueue.add(parent.post.uri, {
+						// only pass in record for non-root ancestors, as the root will have to fetch threadView for replies anyways
+						// and we know that call won't just fall back to getRecord because we've just checked that the post exists
+						record: parent.post.uri !== post.replyRoot &&
+								is(AppBskyFeedPost.mainSchema, parent.post.record)
+							? parent.post.record
+							: undefined,
 						depth: depth + 1,
-						threadView: parent,
 						inclusion: { reason: "ancestor_of", context: uri },
 					});
 					parent = parent.parent;
-				} else if (is(AppBskyFeedDefs.blockedPostSchema, parent)) { // we'll fetch the record anyways
+				} else if (is(AppBskyFeedDefs.blockedPostSchema, parent)) {
 					this.postQueue.add(parent.uri, {
 						depth: depth + 1,
 						inclusion: { reason: "ancestor_of", context: uri },
@@ -552,7 +557,6 @@ export class Backfill {
 interface ProcessPostOptions {
 	inclusion: PostInclusion;
 	record?: AppBskyFeedPost.Main;
-	threadView?: AppBskyFeedDefs.ThreadViewPost;
 	depth?: number;
 }
 
