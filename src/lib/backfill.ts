@@ -194,6 +194,10 @@ export class Backfill {
 			const commit = readBlock(blockmap, car.roots[0], isCommit);
 			await this.db.setRepoRev(did, commit.rev);
 
+			const records: Array<
+				{ uri: ResourceUri; collection: string; record: unknown; inclusion?: PostInclusion }
+			> = [];
+
 			for (const { key, cid } of walkMstEntries(blockmap, commit.data)) {
 				const [collection, rkey] = key.split("/");
 
@@ -217,13 +221,19 @@ export class Backfill {
 
 				if (collection === "app.bsky.feed.post") {
 					if (isOwnRepo) {
-						await this.processors[collection](uri, record, { reason: "self" });
+						records.push({ uri, collection, record, inclusion: { reason: "self" } });
 					} else {
-						await this.processors[collection](uri, record, { reason: "by_follow" });
+						records.push({ uri, collection, record, inclusion: { reason: "by_follow" } });
 					}
 				} else {
-					await this.processors[collection](uri, record);
+					records.push({ uri, collection, record });
 				}
+			}
+
+			// first loop runs synchronously just to update the collection progress bar totals
+			// then this loop awaits on every queue add
+			for (const { uri, collection, record, inclusion } of records) {
+				await this.processors[collection](uri, record, inclusion);
 			}
 		} catch (e) {
 			console.error(`failed to process repo ${did}: ${errorToString(e)}`);
