@@ -35,10 +35,11 @@ import pc from "picocolors";
 const { h32 } = await xxhash();
 
 export const MAX_DEPTH = 5;
-const MANY_FOLLOWS_MAX_DEPTH = 3;
+const MANY_FOLLOWS_MAX_DEPTH = 2;
 const MANY_FOLLOWS_THRESHOLD = 250;
 const WRITE_POSTS_BATCH_SIZE = 20;
 
+const BSKY_APP_DID = "did:plc:z72i7hdynmk6r22z27h6tvur";
 const PUBLIC_APPVIEW_URL = "https://public.api.bsky.app";
 
 type PostInclusion = {
@@ -67,7 +68,7 @@ export class Backfill {
 			this.processRepo(did, collections).finally(() =>
 				this.progress.incrementCompleted("app.bsky.graph.follow")
 			),
-		{ softConcurrency: 10, hardConcurrency: 20, maxQueueSize: 1000 },
+		{ softConcurrency: 10, hardConcurrency: 20, softTimeoutMs: 60_000, maxQueueSize: 1000 },
 	);
 	embeddingsQueue = new BackgroundQueue(
 		(posts: Post[]) =>
@@ -138,6 +139,7 @@ export class Backfill {
 					"app.bsky.graph.follow",
 				]),
 			);
+
 			while (this.repoQueue.size > 0 || this.postQueue.size > 0 || this.embeddingsQueue.size > 0) {
 				await Promise.allSettled([
 					(async () => {
@@ -161,7 +163,7 @@ export class Backfill {
 
 	async processRepo(
 		did: Did,
-		collections = new Set(["app.bsky.feed.post", "app.bsky.feed.repost"]), // for anyone but the user, only process posts and reposts
+		collections: ReadonlySet<string> = new Set(["app.bsky.feed.post", "app.bsky.feed.repost"]), // for anyone but the user, only process posts and reposts
 	): Promise<void> {
 		try {
 			const isOwnRepo = did === this.userDid;
@@ -240,9 +242,9 @@ export class Backfill {
 		let threadView: AppBskyFeedDefs.ThreadViewPost | undefined;
 		if (!record) {
 			try {
-				({ record, threadView } = await this.fetchPost(uri, threadView));
+				({ record, threadView } = await this.fetchPost(uri));
 			} catch (e) {
-				if (e instanceof DOMException && e.name === "AbortError") {
+				if (e instanceof DOMException && e.name === "TimeoutError") {
 					throw e; // handled by BackgroundQueue
 				} else if (e instanceof ClientResponseError && e.error === "NotFound") {
 					return; // logging this is just noise
@@ -257,7 +259,7 @@ export class Backfill {
 		this.seenPosts.add(uriHash);
 
 		const createdAt = toDateOrNull(record.createdAt)?.getTime();
-		if (!createdAt) throw new Error(`invalid post createdAt (${uri}): ${record.createdAt}`);
+		if (!createdAt) return console.error(`invalid post createdAt (${uri}): ${record.createdAt}`);
 
 		const altText = extractAltTexts(record.embed)?.map((alt, i) => `---image ${i + 1}---\n${alt}`)
 			.join("\n\n");
@@ -289,7 +291,7 @@ export class Backfill {
 
 		if (quoted) {
 			let quotedRecordView;
-			if (threadView) {
+			if (threadView?.post.embed) {
 				if (
 					is(AppBskyEmbedRecord.viewSchema, threadView.post.embed) &&
 					is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record)
@@ -302,10 +304,15 @@ export class Backfill {
 					quotedRecordView = threadView.post.embed.record.record;
 				}
 			}
-			if (is(AppBskyFeedPost.mainSchema, quotedRecordView?.value)) {
+			if (quotedRecordView && is(AppBskyFeedPost.mainSchema, quotedRecordView.value)) {
+				void this.postQueue.prepend(quoted, { // prepend so record doesn't stick around in the heap
+					depth: depth + 1,
+					record: quotedRecordView?.value,
+					inclusion: { reason: "quoted_by", context: uri },
+				});
+			} else {
 				void this.postQueue.add(quoted, {
 					depth: depth + 1,
-					record: quotedRecordView.value,
 					inclusion: { reason: "quoted_by", context: uri },
 				});
 			}
@@ -333,7 +340,7 @@ export class Backfill {
 		}
 
 		// otherwise, either the post is a top-level post or there isn't enough depth budget to navigate to siblings & descendants
-		// in which case we'll fetch the thread so we can queue up replies and, if the post itself is a reply, any ancestors
+		// in both cases we'll fetch the thread so that we can queue up replies and, if the post itself is a reply, any ancestors
 		if (!threadView) {
 			const { thread } = await this.xrpc.query(
 				PUBLIC_APPVIEW_URL,
@@ -362,27 +369,26 @@ export class Backfill {
 			return;
 		}
 
+		// if we do have the parent, queue up all ancestors
 		if (threadView.parent) {
-			let parent: unknown = threadView.parent;
+			let parent = threadView.parent;
 			while (parent) {
 				if (is(AppBskyFeedDefs.threadViewPostSchema, parent)) {
-					void this.postQueue.add(parent.post.uri, {
-						// only pass in record for non-root ancestors, as the root will have to fetch threadView for replies anyways
-						// and we know that call won't just fall back to getRecord because we've just checked that the post exists
-						record: parent.post.uri !== post.replyRoot &&
-								is(AppBskyFeedPost.mainSchema, parent.post.record)
+					void this.postQueue.prepend(parent.post.uri, { // prepend so record doesn't stick around in the heap
+						record: is(AppBskyFeedPost.mainSchema, parent.post.record)
 							? parent.post.record
 							: undefined,
 						depth: depth + 1,
 						inclusion: { reason: "ancestor_of", context: uri },
 					});
-					parent = parent.parent;
-				} else if (is(AppBskyFeedDefs.blockedPostSchema, parent)) {
-					void this.postQueue.add(parent.uri, {
-						depth: depth + 1,
-						inclusion: { reason: "ancestor_of", context: uri },
-					});
+					parent = parent.parent!; // we don't actually know it's non-null but the while loop will exit anyways if it's not
 				} else {
+					if (is(AppBskyFeedDefs.blockedPostSchema, parent)) {
+						void this.postQueue.add(parent.uri, {
+							depth: depth + 1,
+							inclusion: { reason: "ancestor_of", context: uri },
+						});
+					}
 					break;
 				}
 			}
@@ -396,8 +402,8 @@ export class Backfill {
 		);
 
 		this.processPostReplies({
-			post: threadView,
 			sourceUri: uri,
+			replies: threadView.replies,
 			backfillDepth: depth,
 			maxThreadDepth,
 		});
@@ -418,14 +424,10 @@ export class Backfill {
 
 	private async fetchPost(
 		uri: ResourceUri,
-		threadView?: AppBskyFeedDefs.ThreadViewPost,
 	): Promise<{ record?: AppBskyFeedPost.Main; threadView?: AppBskyFeedDefs.ThreadViewPost }> {
-		if (threadView && is(AppBskyFeedPost.mainSchema, threadView.post.record)) {
-			return { threadView, record: threadView.post.record };
-		}
-
 		const { repo, collection, rkey } = parseAtUri(uri);
 		if (collection !== "app.bsky.feed.post") return {};
+		if (repo === BSKY_APP_DID) return {}; // no one looks at these and the replies are full of quote spam
 
 		// first try fetching thread view; gets us more info in one query
 		try {
@@ -450,8 +452,8 @@ export class Backfill {
 		} catch (e) {
 			// if the appview says a post doesn't exist, trust it
 			if (e instanceof ClientResponseError && e.error === "NotFound") throw e;
-			// if it's an AbortError, rethrow it to be handled by BackgroundQueue
-			if (e instanceof DOMException && e.name === "AbortError") throw e;
+			// if it's a TimeoutError, rethrow it to be handled by BackgroundQueue
+			if (e instanceof DOMException && e.name === "TimeoutError") throw e;
 			console.warn(
 				`failed to fetch thread view for ${uri}, falling back to getRecord: ${errorToString(e)}`,
 			);
@@ -470,40 +472,34 @@ export class Backfill {
 			throw new Error(`invalid post record for ${uri}`);
 		}
 
-		return { threadView, record: res.value };
+		return { record: res.value };
 	}
 
 	private processPostReplies(
 		{
-			post,
 			sourceUri,
 			backfillDepth,
+			replies = [],
 			threadDepth = 1,
 			maxThreadDepth = 20,
 		}: {
-			post:
-				| AppBskyFeedDefs.ThreadViewPost
-				| AppBskyFeedDefs.NotFoundPost
-				| AppBskyFeedDefs.BlockedPost;
 			sourceUri: string;
 			backfillDepth: number;
+			replies?: AppBskyFeedDefs.ThreadViewPost["replies"];
 			threadDepth?: number;
 			maxThreadDepth?: number;
 		},
 	) {
 		if (threadDepth > maxThreadDepth) return;
-		if (
-			!is(AppBskyFeedDefs.threadViewPostSchema, post) ||
-			!is(AppBskyFeedPost.mainSchema, post.post.record)
-		) return;
-		void this.postQueue.add(post.post.uri, {
-			// the thread view is available but unnecessary to pass in; descendants don't use it
-			depth: backfillDepth + 1,
-			inclusion: { reason: "descendant_of", context: sourceUri },
-		});
-		for (const reply of post.replies ?? []) {
+		for (const reply of replies) {
+			if (!is(AppBskyFeedDefs.threadViewPostSchema, reply)) continue;
+			void this.postQueue.prepend(reply.post.uri, { // prepend so record doesn't stick around in the heap
+				record: is(AppBskyFeedPost.mainSchema, reply.post.record) ? reply.post.record : undefined,
+				depth: backfillDepth + 1,
+				inclusion: { reason: "descendant_of", context: sourceUri },
+			});
 			this.processPostReplies({
-				post: reply,
+				replies: reply.replies,
 				sourceUri,
 				backfillDepth,
 				threadDepth: threadDepth + 1,
@@ -655,8 +651,14 @@ class ProgressTracker {
 		payload: { key: string },
 	) => {
 		const barSize = options.barsize ?? 40;
-		const completeSize = Math.round(barSize * params.value / params.total);
-		const remainingSize = barSize - completeSize;
+		const completeSize = Math.max(
+			0,
+			Math.min(Math.round(barSize * params.value / params.total), barSize),
+		);
+		const remainingSize = Math.max(
+			0,
+			Math.min(barSize - completeSize, barSize),
+		);
 
 		const c = BarPresets.shades_classic.barCompleteChar;
 		const r = BarPresets.shades_classic.barIncompleteChar;

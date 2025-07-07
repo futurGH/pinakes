@@ -21,7 +21,9 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 	private readonly _soft?: number;
 	private readonly _softTimeout: number;
 	private readonly _maxQueueSize?: number;
+
 	private promisesWaitingForSpace: Array<() => void> = [];
+	private timedOutTasks = new Set<T>();
 
 	get activeTasks() { // tasks currently counting against softConcurrency
 		return this._active;
@@ -54,13 +56,19 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 		this.emit("queued");
 
 		// wait for space if max queue size is reached
-		if (this._maxQueueSize && this.size >= this._maxQueueSize) {
-			await new Promise<void>((resolve) => {
-				this.promisesWaitingForSpace.push(resolve);
-			});
-		}
+		await this._waitForSpace();
 
 		this._queue.push(args);
+		this._drain();
+	}
+
+	async prepend(...args: T): Promise<void> {
+		this.emit("queued");
+
+		// wait for space if max queue size is reached
+		await this._waitForSpace();
+
+		this._queue.unshift(args);
 		this._drain();
 	}
 
@@ -104,6 +112,13 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 		}
 	}
 
+	private async _waitForSpace() {
+		if (!this._maxQueueSize || this.size < this._maxQueueSize) return;
+		await new Promise<void>((resolve) => {
+			this.promisesWaitingForSpace.push(resolve);
+		});
+	}
+
 	private _startTask(args: T) {
 		this._running++;
 
@@ -122,9 +137,18 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 
 		Promise.resolve()
 			.then(() => this._fn(...args))
+			.then(() => {
+				if (this.timedOutTasks.has(args)) {
+					this.timedOutTasks.delete(args);
+				}
+			})
 			.catch((err) => {
-				// re-queue AbortErrored tasks, emit everything else
-				if (err instanceof DOMException && err.name === "AbortError") {
+				// re-queue TimeoutErrored tasks, emit everything else
+				if (
+					err instanceof DOMException && err.name === "TimeoutError" &&
+					!this.timedOutTasks.has(args) // if a task has timed out twice, don't re-queue
+				) {
+					this.timedOutTasks.add(args);
 					this._queue.push(args);
 					this._notifyWaiting();
 				} else {
