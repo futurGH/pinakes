@@ -16,7 +16,7 @@ export const backfillCommand = buildCommand({
 			embeddings: {
 				kind: "boolean",
 				brief: "whether to generate vector embeddings",
-				default: true,
+				default: false,
 			},
 		},
 	},

@@ -81,7 +81,7 @@ export class Backfill {
 	maxDepth: number;
 
 	constructor(public userDid: string, public db: Database, options: BackfillOptions = {}) {
-		this.embeddingsEnabled = options.embeddings ?? true;
+		this.embeddingsEnabled = options.embeddings ?? false;
 		this.maxDepth = options.depth ?? MAX_DEPTH;
 
 		const multibarKeys = Object.keys(this.processors);
