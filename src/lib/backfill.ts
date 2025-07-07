@@ -58,14 +58,12 @@ export class Backfill {
 	postQueue = new BackgroundQueue(
 		// sourceCollection, if provided, is the collection this post "came from"
 		(uri: ResourceUri, options: ProcessPostOptions, sourceCollection?: string) =>
-			this.processPost(uri, options).finally(() =>
-				this.progress.incrementCompleted(sourceCollection)
-			),
+			this.processPost(uri, options).then(() => this.progress.incrementCompleted(sourceCollection)),
 		{ softConcurrency: 25, hardConcurrency: 100, maxQueueSize: 100_000 },
 	);
 	repoQueue = new BackgroundQueue(
 		(did: Did, collections?: Set<string>) =>
-			this.processRepo(did, collections).finally(() =>
+			this.processRepo(did, collections).then(() =>
 				this.progress.incrementCompleted("app.bsky.graph.follow")
 			),
 		{ softConcurrency: 10, hardConcurrency: 20, softTimeoutMs: 60_000, maxQueueSize: 1000 },
