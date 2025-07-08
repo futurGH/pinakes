@@ -2,6 +2,9 @@
 	"name": "pinakes",
 	"version": "0.1.0",
 	"description": "a personal bluesky index",
+	"scripts": {
+		"build": "bun build --minify --target=node src/bin/cli.ts | sed 's#../bin/napi-v3/#./node_modules/@huggingface/transformers/node_modules/onnxruntime-node/bin/napi-v3/#' > pinakes"
+	},
 	"dependencies": {
 		"@atcute/atproto": "^3.1.0",
 		"@atcute/bluesky": "^3.1.4",
