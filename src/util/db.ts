@@ -193,9 +193,11 @@ export class Database {
 		const distanceExpr = sql<number>`vector_distance_cos(embedding, ${
 			formatVector(embedding)
 		})`;
-		const altDistanceExpr = sql<number>`vector_distance_cos("altTextEmbedding", ${
+		const altDistanceExpr = sql<
+			number
+		>`case when "altTextEmbedding" is not null then vector_distance_cos("altTextEmbedding", ${
 			formatVector(embedding)
-		})`;
+		}) end`;
 
 		const bestDistanceExpr = includeAltText
 			? sql<number>`
@@ -211,7 +213,7 @@ export class Database {
 			distanceExpr.as("textDistance"),
 			...(includeAltText ? [altDistanceExpr.as("altTextDistance")] : []),
 			bestDistanceExpr.as("bestDistance"),
-		]).orderBy("bestDistance", "asc");
+		]).where("embedding", "is not", null).orderBy("bestDistance", "desc");
 
 		return await this.applySearchPostsOptions(qb, options).execute();
 	}
