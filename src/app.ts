@@ -2,6 +2,7 @@ import { buildApplication, buildRouteMap } from "@stricli/core";
 import { backfillCommand } from "./commands/backfill.ts";
 import { configRoute } from "./commands/config/index.ts";
 import { embeddingsCommand } from "./commands/embeddings.ts";
+import { explainCommand } from "./commands/explain.ts";
 import { searchCommand } from "./commands/search.ts";
 import { formatException } from "./util/util.ts";
 
@@ -14,6 +15,7 @@ const routes = buildRouteMap({
 		backfill: backfillCommand,
 		embeddings: embeddingsCommand,
 		search: searchCommand,
+		explain: explainCommand,
 	},
 	docs: { brief: description },
 });
