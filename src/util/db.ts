@@ -66,48 +66,51 @@ export class Database {
 			await sql`PRAGMA journal_mode=WAL;`.execute(this.db);
 		}
 
-		await this.db.schema.createTable("post").ifNotExists().addColumn(
-			"creator",
-			"varchar",
-			(col) => col.notNull(),
-		).addColumn("rkey", "varchar", (col) => col.notNull()).addColumn(
-			"createdAt",
-			"integer",
-			(col) => col.notNull(),
-		).addColumn("text", "varchar", (col) => col.notNull()).addColumn(
-			"embedding",
-			sql`F32_BLOB(384)`,
-		).addColumn("altText", "varchar").addColumn("altTextEmbedding", sql`F32_BLOB(384)`)
-			.addColumn("replyParent", "varchar").addColumn("replyRoot", "varchar").addColumn(
-				"quoted",
-				"varchar",
-			).addColumn("embedTitle", "varchar").addColumn("embedDescription", "varchar").addColumn(
-				"embedUrl",
-				"varchar",
-			).addColumn("inclusionReason", "varchar", (col) => col.notNull()).addColumn(
-				"inclusionContext",
-				"varchar",
-			).addPrimaryKeyConstraint("pk_post", ["creator", "rkey"]).execute();
-		await this.db.schema.createIndex("post_creator_idx").ifNotExists().on("post").column(
-			"creator",
-		).execute();
+		await /* dprint-ignore */ this.db.schema
+			.createTable("post")
+			.ifNotExists()
+			.addColumn("creator", "varchar", (col) => col.notNull())
+			.addColumn("rkey", "varchar", (col) => col.notNull())
+			.addColumn("createdAt", "integer", (col) => col.notNull())
+			.addColumn("text", "varchar", (col) => col.notNull())
+			.addColumn("embedding", sql`F32_BLOB(384)`)
+			.addColumn("altText", "varchar")
+			.addColumn("altTextEmbedding", sql`F32_BLOB(384)`)
+			.addColumn("replyParent", "varchar")
+			.addColumn("replyRoot", "varchar")
+			.addColumn("quoted", "varchar")
+			.addColumn("embedTitle", "varchar")
+			.addColumn("embedDescription", "varchar")
+			.addColumn("embedUrl", "varchar")
+			.addColumn("inclusionReason", "varchar", (col) => col.notNull())
+			.addColumn("inclusionContext", "varchar")
+			.addPrimaryKeyConstraint("pk_post", ["creator", "rkey"])
+			.execute();
+		await /* dprint-ignore */ this.db.schema
+			.createIndex("post_creator_idx")
+			.ifNotExists()
+			.on("post")
+			.column("creator")
+			.execute();
 		await sql`CREATE INDEX IF NOT EXISTS post_embedding_idx ON post (libsql_vector_idx(embedding, 'compress_neighbors=float8'))`
 			.execute(this.db);
 
-		await this.db.schema.createTable("repo").ifNotExists().addColumn(
-			"did",
-			"varchar",
-			(col) => col.primaryKey(),
-		).addColumn("rev", "varchar", (col) => col.notNull()).execute();
+		await /* dprint-ignore */ this.db.schema
+			.createTable("repo")
+			.ifNotExists()
+			.addColumn("did", "varchar", (col) => col.primaryKey())
+			.addColumn("rev", "varchar", (col) => col.notNull())
+			.execute();
 
-		await this.db.schema.createTable("config").ifNotExists().addColumn(
-			"key",
-			"varchar",
-			(col) => col.primaryKey(),
-		).addColumn("value", "varchar", (col) => col.notNull()).execute();
+		await /* dprint-ignore */ this.db.schema
+			.createTable("config")
+			.ifNotExists()
+			.addColumn("key", "varchar", (col) => col.primaryKey())
+			.addColumn("value", "varchar", (col) => col.notNull())
+			.execute();
 	}
 
-	async insertPost(
+	insertPost(
 		post: Omit<Post, "embedding" | "altTextEmbedding"> & {
 			embedding?: Float32Array | null;
 			altTextEmbedding?: Float32Array | null;
@@ -302,6 +305,6 @@ export interface SearchPostsOptions {
 	includeAltText?: boolean;
 }
 
-const formatVector = (embedding: Float32Array) => {
+export const formatVector = (embedding: Float32Array) => {
 	return sql<Float32Array>`vector32(${`[${embedding.join(",")}]`})`;
 };
