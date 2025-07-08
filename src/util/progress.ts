@@ -50,7 +50,7 @@ export class ProgressTracker {
 		for (const key of this.keys) {
 			const progress = { completed: 0, total: 0 };
 			this.progress[key] = progress;
-			this.bars[key] = this.multibar.create(100, 0, { key }, { clearOnComplete: false });
+			this.bars[key] = this.multibar.create(0, 0, { key }, { clearOnComplete: false });
 
 			const speeds = this.speeds;
 			speeds[key] = [];
@@ -93,7 +93,10 @@ export class ProgressTracker {
 		const c = BarPresets.shades_classic.barCompleteChar;
 		const r = BarPresets.shades_classic.barIncompleteChar;
 
-		const bar = cristal(`${c.repeat(completeSize)}${r.repeat(remainingSize)}`);
+		let barUncolored = `${c.repeat(completeSize)}${r.repeat(remainingSize)}`;
+		if (!barUncolored.length) barUncolored = r.repeat(barSize);
+		const bar = cristal(barUncolored);
+
 		const speedArray = this.speeds[payload.key] ?? [];
 		const averageSpeed = speedArray.length > 0
 			? speedArray.reduce((sum, speed) => sum + speed, 0) / speedArray.length

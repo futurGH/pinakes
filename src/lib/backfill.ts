@@ -314,7 +314,7 @@ export class Backfill {
 		this.queueWritePost(post);
 
 		if (quoted) {
-			let quotedRecordView;
+			let quotedRecordView: AppBskyEmbedRecord.ViewRecord | undefined;
 			if (threadView?.post.embed) {
 				if (
 					is(AppBskyEmbedRecord.viewSchema, threadView.post.embed)

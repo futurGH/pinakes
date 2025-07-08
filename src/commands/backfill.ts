@@ -53,4 +53,6 @@ async function backfillCommandImpl(
 
 	const backfill = new Backfill(did, this.db, { embeddings, depth, appview });
 	await backfill.backfill().catch(console.error);
+
+	process.exit(0);
 }
