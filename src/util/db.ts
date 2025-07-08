@@ -73,9 +73,9 @@ export class Database {
 			.addColumn("rkey", "varchar", (col) => col.notNull())
 			.addColumn("createdAt", "integer", (col) => col.notNull())
 			.addColumn("text", "varchar", (col) => col.notNull())
-			.addColumn("embedding", sql`F32_BLOB(384)`)
+			.addColumn("embedding", sql`F16_BLOB(384)`)
 			.addColumn("altText", "varchar")
-			.addColumn("altTextEmbedding", sql`F32_BLOB(384)`)
+			.addColumn("altTextEmbedding", sql`F16_BLOB(384)`)
 			.addColumn("replyParent", "varchar")
 			.addColumn("replyRoot", "varchar")
 			.addColumn("quoted", "varchar")
@@ -293,5 +293,5 @@ export interface SearchPostsOptions {
 }
 
 export const formatVector = (embedding: Float32Array) => {
-	return sql<Float32Array>`vector32(${`[${embedding.join(",")}]`})`;
+	return sql<Float32Array>`vector16(vector32(${`[${embedding.join(",")}]`}))`;
 };
