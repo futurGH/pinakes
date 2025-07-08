@@ -2,13 +2,19 @@ import { buildApplication, buildRouteMap } from "@stricli/core";
 import { backfillCommand } from "./commands/backfill.ts";
 import { configRoute } from "./commands/config/index.ts";
 import { embeddingsCommand } from "./commands/embeddings.ts";
+import { searchCommand } from "./commands/search.ts";
 import { formatException } from "./util/util.ts";
 
 const { name, version, description } =
 	(await import("../package.json", { with: { type: "json" } })).default;
 
 const routes = buildRouteMap({
-	routes: { config: configRoute, backfill: backfillCommand, embeddings: embeddingsCommand },
+	routes: {
+		config: configRoute,
+		backfill: backfillCommand,
+		embeddings: embeddingsCommand,
+		search: searchCommand,
+	},
 	docs: { brief: description },
 });
 

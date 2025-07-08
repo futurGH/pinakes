@@ -179,8 +179,8 @@ export class Database {
 		const { includeAltText } = options;
 
 		const qb = this.db.selectFrom("post").selectAll().where((eb) => {
-			const q = eb("text", "ilike", `%${text}%`);
-			if (includeAltText) return q.or("altText", "ilike", `%${text}%`);
+			const q = eb("text", "like", `%${text}%`);
+			if (includeAltText) return q.or("altText", "like", `%${text}%`);
 			return q;
 		}).orderBy("createdAt", "desc");
 
@@ -207,22 +207,7 @@ export class Database {
 			`
 			: distanceExpr;
 
-		const qb = this.db.selectFrom("post").select([
-			"rkey",
-			"createdAt",
-			"creator",
-			"text",
-			"embedding",
-			"altText",
-			"altTextEmbedding",
-			"replyParent",
-			"replyRoot",
-			"quoted",
-			"embedTitle",
-			"embedDescription",
-			"embedUrl",
-			"inclusionReason",
-			"inclusionContext",
+		const qb = this.db.selectFrom("post").selectAll().select([
 			distanceExpr.as("textDistance"),
 			...(includeAltText ? [altDistanceExpr.as("altTextDistance")] : []),
 			bestDistanceExpr.as("bestDistance"),
