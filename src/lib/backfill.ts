@@ -15,13 +15,12 @@ import { decode as decodeCbor } from "@atcute/cbor";
 import { Client, ClientResponseError } from "@atcute/client";
 import { type Did, isTid, type ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
-import { GenericFormatter, MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
-import { cristal } from "gradient-string";
 import assert from "node:assert";
 import pc from "picocolors";
 import xxhash from "xxhash-wasm";
 import type { Database, Post, PostInclusionReason } from "../util/db.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
+import { ProgressTracker } from "../util/progress.ts";
 import { BackgroundQueue } from "../util/queue.ts";
 import {
 	errorToString,
@@ -615,75 +614,4 @@ interface ProcessPostOptions {
 	inclusion: PostInclusion;
 	record?: AppBskyFeedPost.Main;
 	depth?: number;
-}
-
-class ProgressTracker {
-	multibar: MultiBar;
-	progress: Record<string, { completed: number; total: number }> = {};
-	bars: Record<string, SingleBar> = {};
-	speeds: Record<string, number> = {};
-
-	constructor(private keys: string[]) {
-		this.multibar = new MultiBar({ format: this.formatter, forceRedraw: true });
-	}
-
-	incrementCompleted(key: string | undefined) {
-		if (!key || !this.progress[key] || !this.bars[key]) return;
-		this.progress[key].completed++;
-		this.bars[key].update(this.progress[key].completed);
-	}
-
-	incrementTotal(key: string | undefined) {
-		if (!key || !this.progress[key] || !this.bars[key]) return;
-		this.progress[key].total++;
-		this.bars[key].setTotal(this.progress[key].total);
-	}
-
-	start() {
-		for (const key of this.keys) {
-			const progress = { completed: 0, total: 0 };
-			this.progress[key] = progress;
-			this.bars[key] = this.multibar.create(100, 0, { key }, { clearOnComplete: false });
-
-			const speeds = this.speeds;
-			let prevCompleted = 0;
-			setTimeout(function updateSpeed() {
-				speeds[key] = progress.completed - prevCompleted;
-				prevCompleted = progress.completed;
-				setTimeout(updateSpeed, 1000);
-			}, 1000);
-		}
-
-		const { multibar } = this;
-		const consoleLog = console.log, consoleWarn = console.warn, consoleError = console.error;
-		console.log = (...data: string[]) => multibar.log(data.join(" ") + "\n");
-		console.warn = (...data: string[]) => console.log(pc.yellow(data.join(" ")));
-		console.error = (...data: string[]) => console.log(pc.red(data.join(" ")));
-
-		return {
-			[Symbol.dispose]() {
-				multibar.stop();
-				console.log = consoleLog;
-				console.warn = consoleWarn;
-				console.error = consoleError;
-			},
-		};
-	}
-
-	private formatter: GenericFormatter = (options, params, payload: { key: string }) => {
-		const barSize = options.barsize ?? 40;
-		const completeSize = Math.max(
-			0,
-			Math.min(Math.round(barSize * params.value / params.total), barSize),
-		);
-		const remainingSize = Math.max(0, Math.min(barSize - completeSize, barSize));
-
-		const c = BarPresets.shades_classic.barCompleteChar;
-		const r = BarPresets.shades_classic.barIncompleteChar;
-
-		const bar = cristal(`${c.repeat(completeSize)}${r.repeat(remainingSize)}`);
-		const speed = this.speeds[payload.key]?.toString().padStart(2, "0") ?? "0";
-
-		return `${payload.key} ${bar} ${params.value}/${params.total} - ${speed} per sec`;
-	};
 }
