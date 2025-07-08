@@ -419,11 +419,11 @@ export class Backfill {
 			}
 		}
 
-		// for a thread with 50 replies, go up to 20 levels deep
-		// for a thread with 500 replies, go up to 4 levels deep
+		// for a thread with 5 replies, go up to 20 levels deep
+		// for a thread with 200 replies, go up to 3 levels deep
 		// in between, scale logarithmically
 		const maxThreadDepth = Math.round(
-			logarithmicScale([50, 500], [20, 4], threadView.post.replyCount ?? 0),
+			logarithmicScale([5, 200], [20, 3], threadView.post.replyCount ?? 0),
 		);
 
 		this.processPostReplies({
