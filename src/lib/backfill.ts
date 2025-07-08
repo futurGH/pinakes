@@ -176,12 +176,7 @@ export class Backfill {
 
 			const repoBytes = await this.xrpc.queryByDid(
 				did,
-				(c) =>
-					c.get("com.atproto.sync.getRepo", {
-						// always fetch full repo for self, we filter based on collection later
-						params: { did, since: isOwnRepo ? undefined : rev },
-						as: "bytes",
-					}),
+				(c) => c.get("com.atproto.sync.getRepo", { params: { did }, as: "bytes" }),
 			);
 
 			const car = CarReader.fromUint8Array(repoBytes);
@@ -197,7 +192,6 @@ export class Backfill {
 			);
 
 			const commit = readBlock(blockmap, car.roots[0], isCommit);
-			await this.db.setRepoRev(did, commit.rev);
 
 			const records: Array<
 				{ uri: ResourceUri; collection: string; record: unknown; inclusion?: PostInclusion }
@@ -213,13 +207,14 @@ export class Backfill {
 
 				const record = decodeCbor(carEntry.bytes);
 
-				// the user's own likes/posts/reposts prior to the last known rev can be ignored
-				// but follows should always be processed in full, as we don't know whether they've created new records
-				// for repos that aren't the user's own, this is already handled by `since: rev`
+				// for repos that aren't the user's own, ignore records created prior to the last known rev
+				// for the user's repo, ignore old records unless they're a follow
+				// we always want to process follows, since we don't know whether they've created new records
 				if (
-					isOwnRepo && isTid(rev) && rkey < rev && collection !== "app.bsky.graph.follow"
+					rev && isTid(rev) && rkey < rev
+					&& (!isOwnRepo || collection !== "app.bsky.graph.follow")
 				) {
-					return;
+					continue;
 				}
 
 				const uri = `at://${did}/${collection}/${rkey}` as ResourceUri;
@@ -247,6 +242,8 @@ export class Backfill {
 			for (const { uri, collection, record, inclusion } of records) {
 				await this.processors[collection](uri, record, inclusion);
 			}
+
+			await this.db.setRepoRev(did, commit.rev);
 		} catch (e) {
 			console.error(`failed to process repo ${did}: ${errorToString(e)}`);
 		}
