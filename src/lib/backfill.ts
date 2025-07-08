@@ -282,9 +282,10 @@ export class Backfill {
 			return console.error(`invalid post createdAt (${uri}): ${record.createdAt}`);
 		}
 
-		const altText = extractAltTexts(record.embed)?.map((alt, i) =>
-			`---image ${i + 1}---\n${alt}`
-		).join("\n\n");
+		const altTexts = extractAltTexts(record.embed);
+		const altText = altTexts && altTexts.length > 1
+			? altTexts.map((alt, i) => `---image ${i + 1}---\n${alt}`).join("\n\n")
+			: altTexts?.[0];
 		const embed = is(AppBskyEmbedExternal.mainSchema, record.embed)
 			? record.embed?.external
 			: null;

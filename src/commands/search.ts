@@ -2,7 +2,7 @@ import { IdResolver } from "@atproto/identity";
 import { buildCommand, numberParser } from "@stricli/core";
 import pc from "picocolors";
 import type { AppContext } from "../context.ts";
-import { SearchPostsOptions } from "../util/db.ts";
+import { Post, SearchPostsOptions } from "../util/db.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
 
 export const searchCommand = buildCommand({
@@ -89,7 +89,9 @@ async function searchCommandImpl(
 		after,
 		includeAltText: includeAlt,
 	};
-	const posts = vector
+	const posts: Array<
+		Post & { textDistance?: number; altTextDistance?: number; bestDistance?: number }
+	> = vector
 		? await (async () => {
 			console.log("loading embeddings model...");
 			await loadEmbeddingsModel();
@@ -108,24 +110,38 @@ async function searchCommandImpl(
 	for (const post of posts) {
 		const handle = await getHandle(post.creator) ?? post.creator;
 		const uri = `at://${post.creator}/app.bsky.feed.post/${post.rkey}`;
-		console.log(
-			`\n${pc.blue(`@${handle}`)} ${pc.gray(`(${uri})`)} - ${
-				pc.dim(new Date(post.createdAt).toLocaleString())
-			}`,
-		);
+
+		let title = `${pc.blue(`@${handle}`)} ${pc.gray(`(${uri})`)} - ${
+			pc.dim(new Date(post.createdAt).toLocaleString())
+		}`;
+		if (vector && post.bestDistance) {
+			title += pc.gray(` (distance: ${post.bestDistance.toFixed(2)})`);
+		}
+
+		console.log(`\n${title}`);
+
 		if (post.replyParent) {
 			console.log(pc.gray(`↳  to: ${post.replyParent}`));
 		}
+
 		console.log(post.text);
+
 		if (post.altText) {
 			if (includeAlt) {
-				console.log(pc.gray(`alt text: ${post.altText}`));
+				let alt = "alt text:";
+				if (post.altText.startsWith("---")) {
+					alt += `\n${post.altText}`;
+				} else {
+					alt += ` ${post.altText}`;
+				}
+				console.log(pc.gray(alt));
 			} else {
 				console.log(pc.gray(`alt text omitted (pass --include-alt)`));
 			}
 		}
+
 		if (post.quoted) {
-			console.log(pc.gray(`quoted: ${post.quoted}`));
+			console.log(pc.gray(`╰──  quoted: ${post.quoted}`));
 		}
 	}
 }
