@@ -7,28 +7,19 @@ export const configSetCommand = buildCommand({
 	parameters: {
 		positional: {
 			kind: "tuple",
-			parameters: [
-				{
-					placeholder: "key",
-					brief: "config key to set",
-					parse: (key: string): keyof ConfigSettings => {
-						if (!(key in ConfigSettings)) {
-							throw new ArgumentParseError("key" as never, key, `invalid config key`);
-						}
-						return key as keyof ConfigSettings;
-					},
+			parameters: [{
+				placeholder: "key",
+				brief: "config key to set",
+				parse: (key: string): keyof ConfigSettings => {
+					if (!(key in ConfigSettings)) {
+						throw new ArgumentParseError("key" as never, key, `invalid config key`);
+					}
+					return key as keyof ConfigSettings;
 				},
-				{
-					placeholder: "value",
-					brief: "value to set",
-					parse: String,
-				},
-			],
+			}, { placeholder: "value", brief: "value to set", parse: String }],
 		},
 	},
-	docs: {
-		brief: "get a config value",
-	},
+	docs: { brief: "get a config value" },
 });
 
 async function configSetCommandImpl(

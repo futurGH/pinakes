@@ -37,12 +37,7 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 
 	constructor(
 		fn: (...args: T) => unknown,
-		{
-			hardConcurrency,
-			softConcurrency,
-			softTimeoutMs = 10_000,
-			maxQueueSize,
-		}: QueueOptions,
+		{ hardConcurrency, softConcurrency, softTimeoutMs = 10_000, maxQueueSize }: QueueOptions,
 	) {
 		super();
 		this._fn = fn;
@@ -135,36 +130,32 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 			}, this._softTimeout)
 			: null;
 
-		Promise.resolve()
-			.then(() => this._fn(...args))
-			.then(() => {
-				if (this.timedOutTasks.has(args)) {
-					this.timedOutTasks.delete(args);
-				}
-			})
-			.catch((err) => {
-				// re-queue TimeoutErrored tasks, emit everything else
-				if (
-					err instanceof DOMException && err.name === "TimeoutError" &&
-					!this.timedOutTasks.has(args) // if a task has timed out twice, don't re-queue
-				) {
-					this.timedOutTasks.add(args);
-					this._queue.push(args);
-					this._notifyWaiting();
-				} else {
-					this.emit("error", err);
-				}
-			})
-			.finally(() => {
-				this._running--;
-				if (timeoutId) clearTimeout(timeoutId);
-				if (countsTowardsSoft) {
-					// fast tasks that finished before the soft timeout
-					this._active = Math.max(this._active - 1, 0);
-				}
-				this.emit("completed");
+		Promise.resolve().then(() => this._fn(...args)).then(() => {
+			if (this.timedOutTasks.has(args)) {
+				this.timedOutTasks.delete(args);
+			}
+		}).catch((err) => {
+			// re-queue TimeoutErrored tasks, emit everything else
+			if (
+				err instanceof DOMException && err.name === "TimeoutError"
+				&& !this.timedOutTasks.has(args) // if a task has timed out twice, don't re-queue
+			) {
+				this.timedOutTasks.add(args);
+				this._queue.push(args);
 				this._notifyWaiting();
-				this._drain();
-			});
+			} else {
+				this.emit("error", err);
+			}
+		}).finally(() => {
+			this._running--;
+			if (timeoutId) clearTimeout(timeoutId);
+			if (countsTowardsSoft) {
+				// fast tasks that finished before the soft timeout
+				this._active = Math.max(this._active - 1, 0);
+			}
+			this.emit("completed");
+			this._notifyWaiting();
+			this._drain();
+		});
 	}
 }

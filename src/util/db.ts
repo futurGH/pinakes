@@ -1,6 +1,6 @@
+import { createClient } from "@libsql/client/node";
 import { Kysely, type SelectQueryBuilder, sql } from "kysely";
 import { LibsqlDialect } from "kysely-libsql";
-import { createClient } from "@libsql/client/node";
 import { toDateOrNull } from "./util.ts";
 
 export type PostInclusionReason =
@@ -54,7 +54,9 @@ export class Database {
 	constructor(path: string) {
 		this.url = path.includes(":") ? path : `file:${path}`;
 		this.db = new Kysely({
-			dialect: new LibsqlDialect({ client: createClient({ url: this.url, concurrency: 100 }) }),
+			dialect: new LibsqlDialect({
+				client: createClient({ url: this.url, concurrency: 100 }),
+			}),
 		});
 	}
 
@@ -63,41 +65,45 @@ export class Database {
 			await sql`PRAGMA journal_mode=WAL;`.execute(this.db);
 		}
 
-		await this.db.schema.createTable("post")
-			.ifNotExists()
-			.addColumn("creator", "varchar", (col) => col.notNull())
-			.addColumn("rkey", "varchar", (col) => col.notNull())
-			.addColumn("createdAt", "integer", (col) => col.notNull())
-			.addColumn("text", "varchar", (col) => col.notNull())
-			.addColumn("embedding", sql`F32_BLOB(384)`)
-			.addColumn("altText", "varchar")
-			.addColumn("altTextEmbedding", sql`F32_BLOB(384)`)
-			.addColumn("replyParent", "varchar")
-			.addColumn("replyRoot", "varchar")
-			.addColumn("quoted", "varchar")
-			.addColumn("embedTitle", "varchar")
-			.addColumn("embedDescription", "varchar")
-			.addColumn("embedUrl", "varchar")
-			.addColumn("inclusionReason", "varchar", (col) => col.notNull())
-			.addColumn("inclusionContext", "varchar")
-			.addPrimaryKeyConstraint("pk_post", ["creator", "rkey"])
-			.execute();
-		await this.db.schema.createIndex("post_creator_idx").ifNotExists().on("post").column("creator")
-			.execute();
+		await this.db.schema.createTable("post").ifNotExists().addColumn(
+			"creator",
+			"varchar",
+			(col) => col.notNull(),
+		).addColumn("rkey", "varchar", (col) => col.notNull()).addColumn(
+			"createdAt",
+			"integer",
+			(col) => col.notNull(),
+		).addColumn("text", "varchar", (col) => col.notNull()).addColumn(
+			"embedding",
+			sql`F32_BLOB(384)`,
+		).addColumn("altText", "varchar").addColumn("altTextEmbedding", sql`F32_BLOB(384)`)
+			.addColumn("replyParent", "varchar").addColumn("replyRoot", "varchar").addColumn(
+				"quoted",
+				"varchar",
+			).addColumn("embedTitle", "varchar").addColumn("embedDescription", "varchar").addColumn(
+				"embedUrl",
+				"varchar",
+			).addColumn("inclusionReason", "varchar", (col) => col.notNull()).addColumn(
+				"inclusionContext",
+				"varchar",
+			).addPrimaryKeyConstraint("pk_post", ["creator", "rkey"]).execute();
+		await this.db.schema.createIndex("post_creator_idx").ifNotExists().on("post").column(
+			"creator",
+		).execute();
 		await sql`CREATE INDEX IF NOT EXISTS post_embedding_idx ON post (libsql_vector_idx(embedding, 'compress_neighbors=float8'))`
 			.execute(this.db);
 
-		await this.db.schema.createTable("repo")
-			.ifNotExists()
-			.addColumn("did", "varchar", (col) => col.primaryKey())
-			.addColumn("rev", "varchar", (col) => col.notNull())
-			.execute();
+		await this.db.schema.createTable("repo").ifNotExists().addColumn(
+			"did",
+			"varchar",
+			(col) => col.primaryKey(),
+		).addColumn("rev", "varchar", (col) => col.notNull()).execute();
 
-		await this.db.schema.createTable("config")
-			.ifNotExists()
-			.addColumn("key", "varchar", (col) => col.primaryKey())
-			.addColumn("value", "varchar", (col) => col.notNull())
-			.execute();
+		await this.db.schema.createTable("config").ifNotExists().addColumn(
+			"key",
+			"varchar",
+			(col) => col.primaryKey(),
+		).addColumn("value", "varchar", (col) => col.notNull()).execute();
 	}
 
 	async insertPost(
@@ -109,19 +115,24 @@ export class Database {
 		return this.insertPosts([post]);
 	}
 
-	async insertPosts(posts: (Omit<Post, "embedding" | "altTextEmbedding"> & {
-		embedding?: Float32Array | null;
-		altTextEmbedding?: Float32Array | null;
-	})[]) {
-		await this.db.insertInto("post")
-			.values(posts.map((post) => ({
+	async insertPosts(
+		posts:
+			(Omit<Post, "embedding" | "altTextEmbedding"> & {
+				embedding?: Float32Array | null;
+				altTextEmbedding?: Float32Array | null;
+			})[],
+	) {
+		await this.db.insertInto("post").values(
+			posts.map((post) => ({
 				creator: post.creator,
 				rkey: post.rkey,
 				createdAt: post.createdAt,
 				text: post.text,
 				embedding: post.embedding ? formatVector(post.embedding) : null,
 				altText: post.altText,
-				altTextEmbedding: post.altTextEmbedding ? formatVector(post.altTextEmbedding) : null,
+				altTextEmbedding: post.altTextEmbedding
+					? formatVector(post.altTextEmbedding)
+					: null,
 				replyParent: post.replyParent,
 				replyRoot: post.replyRoot,
 				quoted: post.quoted,
@@ -130,48 +141,44 @@ export class Database {
 				embedUrl: post.embedUrl,
 				inclusionReason: post.inclusionReason,
 				inclusionContext: post.inclusionContext,
-			})))
-			.onConflict((oc) =>
-				oc.doUpdateSet((eb) => ({
-					creator: eb.ref("excluded.creator"),
-					rkey: eb.ref("excluded.rkey"),
-					createdAt: eb.ref("excluded.createdAt"),
-					text: eb.ref("excluded.text"),
-					embedding: eb.ref("excluded.embedding"),
-					altText: eb.ref("excluded.altText"),
-					altTextEmbedding: eb.ref("excluded.altTextEmbedding"),
-					replyParent: eb.ref("excluded.replyParent"),
-					replyRoot: eb.ref("excluded.replyRoot"),
-					quoted: eb.ref("excluded.quoted"),
-					embedTitle: eb.ref("excluded.embedTitle"),
-					embedDescription: eb.ref("excluded.embedDescription"),
-					embedUrl: eb.ref("excluded.embedUrl"),
-					inclusionReason: eb.ref("excluded.inclusionReason"),
-					inclusionContext: eb.ref("excluded.inclusionContext"),
-				}))
-			)
-			.execute();
+			})),
+		).onConflict((oc) =>
+			oc.doUpdateSet((eb) => ({
+				creator: eb.ref("excluded.creator"),
+				rkey: eb.ref("excluded.rkey"),
+				createdAt: eb.ref("excluded.createdAt"),
+				text: eb.ref("excluded.text"),
+				embedding: eb.ref("excluded.embedding"),
+				altText: eb.ref("excluded.altText"),
+				altTextEmbedding: eb.ref("excluded.altTextEmbedding"),
+				replyParent: eb.ref("excluded.replyParent"),
+				replyRoot: eb.ref("excluded.replyRoot"),
+				quoted: eb.ref("excluded.quoted"),
+				embedTitle: eb.ref("excluded.embedTitle"),
+				embedDescription: eb.ref("excluded.embedDescription"),
+				embedUrl: eb.ref("excluded.embedUrl"),
+				inclusionReason: eb.ref("excluded.inclusionReason"),
+				inclusionContext: eb.ref("excluded.inclusionContext"),
+			}))
+		).execute();
 	}
 
 	async getPost(creator: string, rkey: string) {
-		return await this.db.selectFrom("post")
-			.selectAll()
-			.where("creator", "=", creator)
-			.where("rkey", "=", rkey)
-			.executeTakeFirst();
+		return await this.db.selectFrom("post").selectAll().where("creator", "=", creator).where(
+			"rkey",
+			"=",
+			rkey,
+		).executeTakeFirst();
 	}
 
 	async searchPostsText(text: string, options: SearchPostsOptions) {
 		const { includeAltText } = options;
 
-		const qb = this.db.selectFrom("post")
-			.selectAll()
-			.where((eb) => {
-				const q = eb("text", "ilike", `%${text}%`);
-				if (includeAltText) return q.or("altText", "ilike", `%${text}%`);
-				return q;
-			})
-			.orderBy("createdAt", "desc");
+		const qb = this.db.selectFrom("post").selectAll().where((eb) => {
+			const q = eb("text", "ilike", `%${text}%`);
+			if (includeAltText) return q.or("altText", "ilike", `%${text}%`);
+			return q;
+		}).orderBy("createdAt", "desc");
 
 		return await this.applySearchPostsOptions(qb, options).execute();
 	}
@@ -179,7 +186,9 @@ export class Database {
 	async searchPostsVector(embedding: Float32Array, options: SearchPostsOptions) {
 		const { includeAltText } = options;
 
-		const distanceExpr = sql<number>`vector_distance_cos(embedding, ${formatVector(embedding)})`;
+		const distanceExpr = sql<number>`vector_distance_cos(embedding, ${
+			formatVector(embedding)
+		})`;
 		const altDistanceExpr = sql<number>`vector_distance_cos("altTextEmbedding", ${
 			formatVector(embedding)
 		})`;
@@ -194,29 +203,26 @@ export class Database {
 			`
 			: distanceExpr;
 
-		const qb = this.db
-			.selectFrom("post")
-			.select([
-				"rkey",
-				"createdAt",
-				"creator",
-				"text",
-				"embedding",
-				"altText",
-				"altTextEmbedding",
-				"replyParent",
-				"replyRoot",
-				"quoted",
-				"embedTitle",
-				"embedDescription",
-				"embedUrl",
-				"inclusionReason",
-				"inclusionContext",
-				distanceExpr.as("textDistance"),
-				...(includeAltText ? [altDistanceExpr.as("altTextDistance")] : []),
-				bestDistanceExpr.as("bestDistance"),
-			])
-			.orderBy("bestDistance", "asc");
+		const qb = this.db.selectFrom("post").select([
+			"rkey",
+			"createdAt",
+			"creator",
+			"text",
+			"embedding",
+			"altText",
+			"altTextEmbedding",
+			"replyParent",
+			"replyRoot",
+			"quoted",
+			"embedTitle",
+			"embedDescription",
+			"embedUrl",
+			"inclusionReason",
+			"inclusionContext",
+			distanceExpr.as("textDistance"),
+			...(includeAltText ? [altDistanceExpr.as("altTextDistance")] : []),
+			bestDistanceExpr.as("bestDistance"),
+		]).orderBy("bestDistance", "asc");
 
 		return await this.applySearchPostsOptions(qb, options).execute();
 	}
@@ -244,56 +250,39 @@ export class Database {
 	}
 
 	async getRepoRev(did: string) {
-		return await this.db.selectFrom("repo")
-			.select("rev")
-			.where("did", "=", did)
-			.executeTakeFirst()
-			.then((r) => r?.rev);
+		return await this.db.selectFrom("repo").select("rev").where("did", "=", did)
+			.executeTakeFirst().then((r) => r?.rev);
 	}
 
 	async setRepoRev(did: string, rev: string) {
-		await this.db.insertInto("repo")
-			.values({
-				did,
-				rev,
-			})
-			.onConflict((oc) => oc.column("did").doUpdateSet({ rev }))
-			.execute();
+		await this.db.insertInto("repo").values({ did, rev }).onConflict((oc) =>
+			oc.column("did").doUpdateSet({ rev })
+		).execute();
 	}
 
-	async getConfig<K extends keyof ConfigSettings>(key: K): Promise<ConfigSettings[K] | undefined> {
-		return await this.db.selectFrom("config")
-			.select("value")
-			.where("key", "=", key)
-			.executeTakeFirst()
-			.then((r) => r?.value);
+	async getConfig<K extends keyof ConfigSettings>(
+		key: K,
+	): Promise<ConfigSettings[K] | undefined> {
+		return await this.db.selectFrom("config").select("value").where("key", "=", key)
+			.executeTakeFirst().then((r) => r?.value);
 	}
 
 	async setConfig<K extends keyof ConfigSettings>(
 		key: K,
 		value: NonNullable<ConfigSettings[K]>,
 	): Promise<void> {
-		await this.db.insertInto("config")
-			.values({
-				key,
-				value,
-			})
-			.onConflict((oc) => oc.column("key").doUpdateSet({ value }))
-			.execute();
+		await this.db.insertInto("config").values({ key, value }).onConflict((oc) =>
+			oc.column("key").doUpdateSet({ value })
+		).execute();
 	}
 
 	async deleteConfig<K extends keyof ConfigSettings>(key: K): Promise<void> {
-		await this.db.deleteFrom("config")
-			.where("key", "=", key)
-			.execute();
+		await this.db.deleteFrom("config").where("key", "=", key).execute();
 	}
 }
 
 export const ConfigSettings = {
-	did: {
-		description: "The user's DID",
-		default: "" as string | undefined,
-	},
+	did: { description: "The user's DID", default: "" as string | undefined },
 } as const;
 export type ConfigSettings = {
 	[K in keyof typeof ConfigSettings]: (typeof ConfigSettings)[K]["default"];

@@ -1,24 +1,15 @@
 import { Client, ok, simpleFetchHandler, type XRPCErrorPayload } from "@atcute/client";
 import { IdResolver } from "@atproto/identity";
-import { setTimeout as sleep } from "node:timers/promises";
 import { DidNotFoundError } from "@atproto/identity";
 import { LruCache } from "@std/cache";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Agent, setGlobalDispatcher } from "undici";
 
 type ExtractSuccessData<T> = T extends { ok: true; data: infer D } ? D : never;
 
 type UnknownClientResponse =
-	& {
-		status: number;
-		headers: Headers;
-	}
-	& ({
-		ok: true;
-		data: unknown;
-	} | {
-		ok: false;
-		data: XRPCErrorPayload;
-	});
+	& { status: number; headers: Headers }
+	& ({ ok: true; data: unknown } | { ok: false; data: XRPCErrorPayload });
 
 const agent = new Agent({ pipelining: 0 });
 setGlobalDispatcher(agent);
@@ -103,8 +94,8 @@ export class XRPCManager {
 		if (attempt >= maxRetries) return false;
 
 		if (
-			"status" in error && typeof error.status === "number" &&
-			retryableStatusCodes.has(error.status)
+			"status" in error && typeof error.status === "number"
+			&& retryableStatusCodes.has(error.status)
 		) {
 			const delay = Math.pow(3, attempt + 1);
 			console.warn(`retrying ${error.status} in ${delay} seconds`, error);
@@ -118,13 +109,12 @@ export class XRPCManager {
 	private async getServiceForDid(did: string) {
 		if (this.didToServiceCache.has(did)) return this.didToServiceCache.get(did)!;
 
-		const { pds } = await this.idResolver.did.resolveAtprotoData(did)
-			.catch((e) => {
-				if (e instanceof DidNotFoundError) {
-					return { pds: null };
-				}
-				throw e;
-			});
+		const { pds } = await this.idResolver.did.resolveAtprotoData(did).catch((e) => {
+			if (e instanceof DidNotFoundError) {
+				return { pds: null };
+			}
+			throw e;
+		});
 		const service = pds ? new URL(pds).origin : null;
 		this.didToServiceCache.set(did, service);
 		return service;

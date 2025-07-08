@@ -20,9 +20,7 @@ export const backfillCommand = buildCommand({
 			},
 		},
 	},
-	docs: {
-		brief: "backfill the index with all posts you might've seen",
-	},
+	docs: { brief: "backfill the index with all posts you might've seen" },
 });
 
 async function backfillCommandImpl(

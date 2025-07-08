@@ -1,6 +1,4 @@
-import type { Database, Post, PostInclusionReason } from "../util/db.ts";
-import { BackgroundQueue } from "../util/queue.ts";
-import { XRPCManager } from "../util/xrpc.ts";
+import type {} from "@atcute/atproto";
 import {
 	AppBskyEmbedExternal,
 	AppBskyEmbedRecord,
@@ -11,11 +9,20 @@ import {
 	AppBskyFeedRepost,
 	AppBskyGraphFollow,
 } from "@atcute/bluesky";
-import type {} from "@atcute/atproto";
+import { CarReader } from "@atcute/car/v4";
+import { collectBlock, isCommit, readBlock, walkMstEntries } from "@atcute/car/v4/repo-reader";
+import { decode as decodeCbor } from "@atcute/cbor";
+import { Client, ClientResponseError } from "@atcute/client";
 import { type Did, isTid, type ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
-import { CarReader } from "@atcute/car/v4";
 import { GenericFormatter, MultiBar, Presets as BarPresets, type SingleBar } from "cli-progress";
+import { cristal } from "gradient-string";
+import assert from "node:assert";
+import pc from "picocolors";
+import xxhash from "xxhash-wasm";
+import type { Database, Post, PostInclusionReason } from "../util/db.ts";
+import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
+import { BackgroundQueue } from "../util/queue.ts";
 import {
 	errorToString,
 	extractAltTexts,
@@ -23,14 +30,7 @@ import {
 	parseAtUri,
 	toDateOrNull,
 } from "../util/util.ts";
-import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
-import { Client, ClientResponseError } from "@atcute/client";
-import { decode as decodeCbor } from "@atcute/cbor";
-import { collectBlock, isCommit, readBlock, walkMstEntries } from "@atcute/car/v4/repo-reader";
-import xxhash from "xxhash-wasm";
-import assert from "node:assert";
-import { cristal } from "gradient-string";
-import pc from "picocolors";
+import { XRPCManager } from "../util/xrpc.ts";
 
 const { h32 } = await xxhash();
 
@@ -42,10 +42,7 @@ const WRITE_POSTS_BATCH_SIZE = 20;
 const BSKY_APP_DID = "did:plc:z72i7hdynmk6r22z27h6tvur";
 const PUBLIC_APPVIEW_URL = "https://public.api.bsky.app";
 
-type PostInclusion = {
-	reason: PostInclusionReason;
-	context?: string;
-};
+type PostInclusion = { reason: PostInclusionReason; context?: string };
 
 export interface BackfillOptions {
 	embeddings?: boolean;
@@ -58,7 +55,9 @@ export class Backfill {
 	postQueue = new BackgroundQueue(
 		// sourceCollection, if provided, is the collection this post "came from"
 		(uri: ResourceUri, options: ProcessPostOptions, sourceCollection?: string) =>
-			this.processPost(uri, options).then(() => this.progress.incrementCompleted(sourceCollection)),
+			this.processPost(uri, options).then(() =>
+				this.progress.incrementCompleted(sourceCollection)
+			),
 		{ softConcurrency: 25, hardConcurrency: 100, maxQueueSize: 100_000 },
 	);
 	repoQueue = new BackgroundQueue(
@@ -70,7 +69,9 @@ export class Backfill {
 	);
 	embeddingsQueue = new BackgroundQueue(
 		(posts: Post[]) =>
-			this.generateEmbeddings(posts).catch((e) => console.error("error generating embeddings:", e)),
+			this.generateEmbeddings(posts).catch((e) =>
+				console.error("error generating embeddings:", e)
+			),
 		{ hardConcurrency: 1 },
 	);
 
@@ -125,7 +126,7 @@ export class Backfill {
 
 		const startTime = performance.now();
 		{
-			using _logging = this.progress.start(); // auto resets console.* at the end of the block
+			using _logging = this.progress.start();// auto resets console.* at the end of the block
 
 			console.log(`fetching repo for ${pc.underline(handle)}...`);
 			await this.processRepo(
@@ -138,7 +139,9 @@ export class Backfill {
 				]),
 			);
 
-			while (this.repoQueue.size > 0 || this.postQueue.size > 0 || this.embeddingsQueue.size > 0) {
+			while (
+				this.repoQueue.size > 0 || this.postQueue.size > 0 || this.embeddingsQueue.size > 0
+			) {
 				await Promise.allSettled([
 					(async () => {
 						while (this.repoQueue.size > 0) await this.repoQueue.processAll();
@@ -147,7 +150,9 @@ export class Backfill {
 						while (this.postQueue.size > 0) await this.postQueue.processAll();
 					})(),
 					this.embeddingsEnabled && (async () => {
-						while (this.embeddingsQueue.size > 0) await this.embeddingsQueue.processAll();
+						while (this.embeddingsQueue.size > 0) {
+							await this.embeddingsQueue.processAll();
+						}
 					})(),
 				]);
 			}
@@ -209,7 +214,9 @@ export class Backfill {
 				// the user's own likes/posts/reposts prior to the last known rev can be ignored
 				// but follows should always be processed in full, as we don't know whether they've created new records
 				// for repos that aren't the user's own, this is already handled by `since: rev`
-				if (isOwnRepo && isTid(rev) && rkey < rev && collection !== "app.bsky.graph.follow") {
+				if (
+					isOwnRepo && isTid(rev) && rkey < rev && collection !== "app.bsky.graph.follow"
+				) {
 					return;
 				}
 
@@ -221,7 +228,12 @@ export class Backfill {
 					if (isOwnRepo) {
 						records.push({ uri, collection, record, inclusion: { reason: "self" } });
 					} else {
-						records.push({ uri, collection, record, inclusion: { reason: "by_follow" } });
+						records.push({
+							uri,
+							collection,
+							record,
+							inclusion: { reason: "by_follow" },
+						});
 					}
 				} else {
 					records.push({ uri, collection, record });
@@ -267,11 +279,16 @@ export class Backfill {
 		this.seenPosts.add(uriHash);
 
 		const createdAt = toDateOrNull(record.createdAt)?.getTime();
-		if (!createdAt) return console.error(`invalid post createdAt (${uri}): ${record.createdAt}`);
+		if (!createdAt) {
+			return console.error(`invalid post createdAt (${uri}): ${record.createdAt}`);
+		}
 
-		const altText = extractAltTexts(record.embed)?.map((alt, i) => `---image ${i + 1}---\n${alt}`)
-			.join("\n\n");
-		const embed = is(AppBskyEmbedExternal.mainSchema, record.embed) ? record.embed?.external : null;
+		const altText = extractAltTexts(record.embed)?.map((alt, i) =>
+			`---image ${i + 1}---\n${alt}`
+		).join("\n\n");
+		const embed = is(AppBskyEmbedExternal.mainSchema, record.embed)
+			? record.embed?.external
+			: null;
 		const quoted = is(AppBskyEmbedRecord.mainSchema, record.embed)
 			? record.embed.record.uri
 			: is(AppBskyEmbedRecordWithMedia.mainSchema, record.embed)
@@ -301,13 +318,13 @@ export class Backfill {
 			let quotedRecordView;
 			if (threadView?.post.embed) {
 				if (
-					is(AppBskyEmbedRecord.viewSchema, threadView.post.embed) &&
-					is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record)
+					is(AppBskyEmbedRecord.viewSchema, threadView.post.embed)
+					&& is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record)
 				) {
 					quotedRecordView = threadView.post.embed.record;
 				} else if (
-					is(AppBskyEmbedRecordWithMedia.viewSchema, threadView.post.embed) &&
-					is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record.record)
+					is(AppBskyEmbedRecordWithMedia.viewSchema, threadView.post.embed)
+					&& is(AppBskyEmbedRecord.viewRecordSchema, threadView.post.embed.record.record)
 				) {
 					quotedRecordView = threadView.post.embed.record.record;
 				}
@@ -425,7 +442,9 @@ export class Backfill {
 	private async writePosts(): Promise<void> {
 		while (this.toWrite.length > 0) {
 			const batch = this.toWrite.splice(0, WRITE_POSTS_BATCH_SIZE);
-			await this.db.insertPosts(batch).catch((e) => console.error("error inserting posts:", e));
+			await this.db.insertPosts(batch).catch((e) =>
+				console.error("error inserting posts:", e)
+			);
 			if (this.embeddingsEnabled) this.embeddingsQueue.add(batch);
 		}
 	}
@@ -445,7 +464,9 @@ export class Backfill {
 			);
 			if (thread.$type === "app.bsky.feed.defs#threadViewPost") {
 				if (is(AppBskyFeedPost.mainSchema, thread?.post?.record)) {
-					const threadView = is(AppBskyFeedDefs.threadViewPostSchema, thread) ? thread : undefined;
+					const threadView = is(AppBskyFeedDefs.threadViewPostSchema, thread)
+						? thread
+						: undefined;
 					return { threadView, record: thread.post.record };
 				} else {
 					return {}; // if a valid thread view was returned, containing an invalid post record, don't bother to fetch it
@@ -463,7 +484,9 @@ export class Backfill {
 			// if it's a TimeoutError, rethrow it to be handled by BackgroundQueue
 			if (e instanceof DOMException && e.name === "TimeoutError") throw e;
 			console.warn(
-				`failed to fetch thread view for ${uri}, falling back to getRecord: ${errorToString(e)}`,
+				`failed to fetch thread view for ${uri}, falling back to getRecord: ${
+					errorToString(e)
+				}`,
 			);
 		}
 
@@ -484,13 +507,7 @@ export class Backfill {
 	}
 
 	private processPostReplies(
-		{
-			sourceUri,
-			backfillDepth,
-			replies = [],
-			threadDepth = 1,
-			maxThreadDepth = 20,
-		}: {
+		{ sourceUri, backfillDepth, replies = [], threadDepth = 1, maxThreadDepth = 20 }: {
 			sourceUri: string;
 			backfillDepth: number;
 			replies?: AppBskyFeedDefs.ThreadViewPost["replies"];
@@ -502,7 +519,9 @@ export class Backfill {
 		for (const reply of replies) {
 			if (!is(AppBskyFeedDefs.threadViewPostSchema, reply)) continue;
 			void this.postQueue.prepend(reply.post.uri, { // prepend so record doesn't stick around in the heap
-				record: is(AppBskyFeedPost.mainSchema, reply.post.record) ? reply.post.record : undefined,
+				record: is(AppBskyFeedPost.mainSchema, reply.post.record)
+					? reply.post.record
+					: undefined,
 				depth: backfillDepth + 1,
 				inclusion: { reason: "descendant_of", context: sourceUri },
 			});
@@ -578,9 +597,11 @@ export class Backfill {
 		},
 		"app.bsky.feed.like": async (_uri, record) => {
 			if (!is(AppBskyFeedLike.mainSchema, record)) return;
-			await this.postQueue.add(record.subject.uri, {
-				inclusion: { reason: "liked_by_self" },
-			}, "app.bsky.feed.like");
+			await this.postQueue.add(
+				record.subject.uri,
+				{ inclusion: { reason: "liked_by_self" } },
+				"app.bsky.feed.like",
+			);
 		},
 		"app.bsky.graph.follow": async (_uri, record) => {
 			if (!is(AppBskyGraphFollow.mainSchema, record)) return;
@@ -602,9 +623,7 @@ class ProgressTracker {
 	speeds: Record<string, number> = {};
 
 	constructor(private keys: string[]) {
-		this.multibar = new MultiBar(
-			{ format: this.formatter, forceRedraw: true },
-		);
+		this.multibar = new MultiBar({ format: this.formatter, forceRedraw: true });
 	}
 
 	incrementCompleted(key: string | undefined) {
@@ -627,14 +646,11 @@ class ProgressTracker {
 
 			const speeds = this.speeds;
 			let prevCompleted = 0;
-			setTimeout(
-				function updateSpeed() {
-					speeds[key] = progress.completed - prevCompleted;
-					prevCompleted = progress.completed;
-					setTimeout(updateSpeed, 1000);
-				},
-				1000,
-			);
+			setTimeout(function updateSpeed() {
+				speeds[key] = progress.completed - prevCompleted;
+				prevCompleted = progress.completed;
+				setTimeout(updateSpeed, 1000);
+			}, 1000);
 		}
 
 		const { multibar } = this;
@@ -653,20 +669,13 @@ class ProgressTracker {
 		};
 	}
 
-	private formatter: GenericFormatter = (
-		options,
-		params,
-		payload: { key: string },
-	) => {
+	private formatter: GenericFormatter = (options, params, payload: { key: string }) => {
 		const barSize = options.barsize ?? 40;
 		const completeSize = Math.max(
 			0,
 			Math.min(Math.round(barSize * params.value / params.total), barSize),
 		);
-		const remainingSize = Math.max(
-			0,
-			Math.min(barSize - completeSize, barSize),
-		);
+		const remainingSize = Math.max(0, Math.min(barSize - completeSize, barSize));
 
 		const c = BarPresets.shades_classic.barCompleteChar;
 		const r = BarPresets.shades_classic.barIncompleteChar;

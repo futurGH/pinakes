@@ -1,5 +1,5 @@
-import pc from "picocolors";
 import { buildCommand } from "@stricli/core";
+import pc from "picocolors";
 import type { AppContext } from "../../context.ts";
 import { ConfigSettings } from "../../util/db.ts";
 
@@ -8,23 +8,19 @@ export const configGetCommand = buildCommand({
 	parameters: {
 		positional: {
 			kind: "tuple",
-			parameters: [
-				{
-					placeholder: "key",
-					brief: "config key to get value for",
-					parse: (key: string): keyof ConfigSettings => {
-						if (!(key in ConfigSettings)) {
-							throw new SyntaxError("invalid config key");
-						}
-						return key as keyof ConfigSettings;
-					},
+			parameters: [{
+				placeholder: "key",
+				brief: "config key to get value for",
+				parse: (key: string): keyof ConfigSettings => {
+					if (!(key in ConfigSettings)) {
+						throw new SyntaxError("invalid config key");
+					}
+					return key as keyof ConfigSettings;
 				},
-			],
+			}],
 		},
 	},
-	docs: {
-		brief: "get a config value",
-	},
+	docs: { brief: "get a config value" },
 });
 
 async function configGetCommandImpl(this: AppContext, _: {}, key: keyof ConfigSettings) {

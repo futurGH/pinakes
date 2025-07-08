@@ -4,15 +4,17 @@ let extractor: FeatureExtractionPipeline | undefined;
 
 export async function loadEmbeddingsModel() {
 	try {
-		return extractor ??= await pipeline("feature-extraction", "Xenova/multi-qa-MiniLM-L6-cos-v1", {
-			device: navigator.gpu ? "webgpu" : "cpu",
-			dtype: "auto",
-		});
+		return extractor ??= await pipeline(
+			"feature-extraction",
+			"Xenova/multi-qa-MiniLM-L6-cos-v1",
+			{ device: navigator.gpu ? "webgpu" : "cpu", dtype: "auto" },
+		);
 	} catch {
-		return extractor ??= await pipeline("feature-extraction", "Xenova/multi-qa-MiniLM-L6-cos-v1", {
-			device: "cpu",
-			dtype: "auto",
-		});
+		return extractor ??= await pipeline(
+			"feature-extraction",
+			"Xenova/multi-qa-MiniLM-L6-cos-v1",
+			{ device: "cpu", dtype: "auto" },
+		);
 	}
 }
 

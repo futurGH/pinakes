@@ -23,6 +23,7 @@
 		"xxhash-wasm": "^1.1.0"
 	},
 	"devDependencies": {
-		"@types/cli-progress": "^3.11.6"
+		"@types/cli-progress": "^3.11.6",
+		"dprint": "^0.50.1"
 	}
 }

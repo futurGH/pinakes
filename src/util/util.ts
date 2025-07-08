@@ -1,4 +1,12 @@
 import {
+	AppBskyEmbedImages,
+	AppBskyEmbedRecordWithMedia,
+	AppBskyEmbedVideo,
+	type AppBskyFeedPost,
+} from "@atcute/bluesky";
+import { parseCanonicalResourceUri } from "@atcute/lexicons/syntax";
+import { is } from "@atcute/lexicons/validations";
+import {
 	AliasNotFoundError,
 	ArgumentParseError,
 	ArgumentScannerError,
@@ -8,15 +16,6 @@ import {
 	UnsatisfiedFlagError,
 	UnsatisfiedPositionalError,
 } from "@stricli/core";
-import {
-	AppBskyEmbedImages,
-	AppBskyEmbedRecordWithMedia,
-	AppBskyEmbedVideo,
-	AppBskyFeedDefs,
-	type AppBskyFeedPost,
-} from "@atcute/bluesky";
-import { is } from "@atcute/lexicons/validations";
-import { parseCanonicalResourceUri } from "@atcute/lexicons/syntax";
 
 export function errorToString(error: unknown): string {
 	return typeof error === "object" && error !== null && "message" in error
@@ -92,8 +91,8 @@ export function formatException(exc: unknown): string {
 		return `too many arguments for --${exc.externalFlagName}, encountered "${exc.input}" after "${exc.previousInput}"`;
 	}
 	if (exc instanceof UnsatisfiedFlagError) {
-		return `expected input for flag --${exc.externalFlagName}` +
-			(exc.nextFlagName ? ` but encountered --${exc.nextFlagName} instead` : "");
+		return `expected input for flag --${exc.externalFlagName}`
+			+ (exc.nextFlagName ? ` but encountered --${exc.nextFlagName} instead` : "");
 	}
 	if (exc instanceof UnexpectedPositionalError) {
 		return `too many arguments, expected ${exc.expectedCount} but encountered "${exc.input}"`;

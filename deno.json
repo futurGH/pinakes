@@ -1,8 +1,0 @@
-{
-	"fmt": {
-		"useTabs": true,
-		"useBraces": "whenNotSingleLine",
-		"lineWidth": 100
-	},
-	"unstable": ["webgpu"]
-}

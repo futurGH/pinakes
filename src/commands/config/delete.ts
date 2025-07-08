@@ -7,23 +7,19 @@ export const configDeleteCommand = buildCommand({
 	parameters: {
 		positional: {
 			kind: "tuple",
-			parameters: [
-				{
-					placeholder: "key",
-					brief: "config key to delete",
-					parse: (key: string): keyof ConfigSettings => {
-						if (!(key in ConfigSettings)) {
-							throw new SyntaxError("invalid config key");
-						}
-						return key as keyof ConfigSettings;
-					},
+			parameters: [{
+				placeholder: "key",
+				brief: "config key to delete",
+				parse: (key: string): keyof ConfigSettings => {
+					if (!(key in ConfigSettings)) {
+						throw new SyntaxError("invalid config key");
+					}
+					return key as keyof ConfigSettings;
 				},
-			],
+			}],
 		},
 	},
-	docs: {
-		brief: "delete a config value",
-	},
+	docs: { brief: "delete a config value" },
 });
 
 async function configDeleteCommandImpl(this: AppContext, _: {}, key: keyof ConfigSettings) {
