@@ -1,6 +1,6 @@
 # pinakes
 
-a searchable index of every bluesky post you might've seen (with vector embeddings)
+a local sqlite index of every bluesky post you might've seen (with optional vector embeddings)
 
 - `bun install`
 - `bun run build`
