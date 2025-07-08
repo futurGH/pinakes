@@ -40,13 +40,14 @@ const MANY_FOLLOWS_THRESHOLD = 250;
 const WRITE_POSTS_BATCH_SIZE = 20;
 
 const BSKY_APP_DID = "did:plc:z72i7hdynmk6r22z27h6tvur";
-const PUBLIC_APPVIEW_URL = "https://public.api.bsky.app";
+export const PUBLIC_APPVIEW_URL = "https://public.api.bsky.app";
 
 type PostInclusion = { reason: PostInclusionReason; context?: string };
 
 export interface BackfillOptions {
 	embeddings?: boolean;
 	depth?: number;
+	appview?: string;
 }
 
 export class Backfill {
@@ -80,10 +81,12 @@ export class Backfill {
 
 	embeddingsEnabled: boolean;
 	maxDepth: number;
+	appview: string;
 
 	constructor(public userDid: string, public db: Database, options: BackfillOptions = {}) {
 		this.embeddingsEnabled = options.embeddings ?? false;
 		this.maxDepth = options.depth ?? MAX_DEPTH;
+		this.appview = options.appview ?? PUBLIC_APPVIEW_URL;
 
 		const multibarKeys = Object.keys(this.processors);
 		multibarKeys.push("posts");
@@ -98,7 +101,7 @@ export class Backfill {
 
 	async backfill() {
 		const { handle, followsCount } = await this.xrpc.query(
-			PUBLIC_APPVIEW_URL,
+			this.appview,
 			(c) => c.get("app.bsky.actor.getProfile", { params: { actor: this.userDid as Did } }),
 		).catch((e) => {
 			console.error(`error fetching profile for ${this.userDid}: ${errorToString(e)}`);
@@ -367,13 +370,11 @@ export class Backfill {
 		// otherwise, either the post is a top-level post or there isn't enough depth budget to navigate to siblings & descendants
 		// in both cases we'll fetch the thread so that we can queue up replies and, if the post itself is a reply, any ancestors
 		if (!threadView) {
-			const { thread } = await this.xrpc.query(
-				PUBLIC_APPVIEW_URL,
-				this.getPostThreadQuery(uri),
-			).catch((e) => {
-				console.error(`error fetching thread for ${uri}`, e);
-				return { thread: null };
-			});
+			const { thread } = await this.xrpc.query(this.appview, this.getPostThreadQuery(uri))
+				.catch((e) => {
+					console.error(`error fetching thread for ${uri}`, e);
+					return { thread: null };
+				});
 			if (is(AppBskyFeedDefs.threadViewPostSchema, thread)) threadView = thread;
 		}
 
@@ -459,7 +460,7 @@ export class Backfill {
 		// first try fetching thread view; gets us more info in one query
 		try {
 			const { thread } = await this.xrpc.queryNoRetry(
-				PUBLIC_APPVIEW_URL,
+				this.appview,
 				this.getPostThreadQuery(uri),
 			);
 			if (thread.$type === "app.bsky.feed.defs#threadViewPost") {

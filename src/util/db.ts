@@ -1,6 +1,7 @@
 import { createClient } from "@libsql/client/node";
 import { Kysely, type SelectQueryBuilder, sql } from "kysely";
 import { LibsqlDialect } from "kysely-libsql";
+import { PUBLIC_APPVIEW_URL } from "../lib/backfill.ts";
 import { toDateOrNull } from "./util.ts";
 
 export type PostInclusionReason =
@@ -282,7 +283,11 @@ export class Database {
 }
 
 export const ConfigSettings = {
-	did: { description: "The user's DID", default: "" as string | undefined },
+	did: { description: "the user's DID", default: "" as string | undefined },
+	appview: {
+		description: "the appview to query",
+		default: PUBLIC_APPVIEW_URL as string | undefined,
+	},
 } as const;
 export type ConfigSettings = {
 	[K in keyof typeof ConfigSettings]: (typeof ConfigSettings)[K]["default"];

@@ -18,6 +18,12 @@ export const backfillCommand = buildCommand({
 				brief: "whether to generate vector embeddings",
 				default: false,
 			},
+			appview: {
+				kind: "parsed",
+				parse: String,
+				brief: "custom appview to use for fetching posts",
+				optional: true,
+			},
 		},
 	},
 	docs: { brief: "backfill the index with all posts you might've seen" },
@@ -25,7 +31,7 @@ export const backfillCommand = buildCommand({
 
 async function backfillCommandImpl(
 	this: AppContext,
-	{ depth, embeddings }: { depth: number; embeddings: boolean },
+	{ depth, embeddings, appview }: { depth: number; embeddings: boolean; appview?: string },
 ) {
 	const did = await this.db.getConfig("did");
 	if (!did) {
@@ -35,6 +41,8 @@ async function backfillCommandImpl(
 		return;
 	}
 
+	appview ??= await this.db.getConfig("appview");
+
 	if (!embeddings) {
 		console.warn(
 			`backfilling without generating embeddings; you can run ${
@@ -43,6 +51,6 @@ async function backfillCommandImpl(
 		);
 	}
 
-	const backfill = new Backfill(did, this.db, { embeddings, depth });
+	const backfill = new Backfill(did, this.db, { embeddings, depth, appview });
 	await backfill.backfill().catch(console.error);
 }
