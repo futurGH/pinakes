@@ -23,7 +23,6 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 	private readonly _maxQueueSize?: number;
 
 	private promisesWaitingForSpace: Array<() => void> = [];
-	private timedOutTasks = new Set<T>();
 
 	get activeTasks() { // tasks currently counting against softConcurrency
 		return this._active;
@@ -130,22 +129,8 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 			}, this._softTimeout)
 			: null;
 
-		Promise.resolve().then(() => this._fn(...args)).then(() => {
-			if (this.timedOutTasks.has(args)) {
-				this.timedOutTasks.delete(args);
-			}
-		}).catch((err) => {
-			// re-queue TimeoutErrored tasks, emit everything else
-			if (
-				err instanceof DOMException && err.name === "TimeoutError"
-				&& !this.timedOutTasks.has(args) // if a task has timed out twice, don't re-queue
-			) {
-				this.timedOutTasks.add(args);
-				this._queue.push(args);
-				this._notifyWaiting();
-			} else {
-				this.emit("error", err);
-			}
+		Promise.resolve().then(() => this._fn(...args)).catch((err) => {
+			this.emit("error", err);
 		}).finally(() => {
 			this._running--;
 			if (timeoutId) clearTimeout(timeoutId);

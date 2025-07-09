@@ -72,9 +72,8 @@ export class XRPCManager {
 			return true;
 		}
 
-		// this ought to be true, but we just want to rethrow AbortErrors to be handled
-		// by the BackgroundQueue so that the task can be retied later
-		if (error instanceof DOMException && error.name === "AbortError") return false;
+		if (error instanceof DOMException && error.name === "TimeoutError") return true;
+
 		if (error instanceof TypeError) return false;
 
 		if ("headers" in error && error.headers) {

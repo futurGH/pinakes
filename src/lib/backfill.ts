@@ -263,9 +263,7 @@ export class Backfill {
 			try {
 				({ record, threadView } = await this.fetchPost(uri));
 			} catch (e) {
-				if (e instanceof DOMException && e.name === "TimeoutError") {
-					throw e; // handled by BackgroundQueue
-				} else if (e instanceof ClientResponseError && e.error === "NotFound") {
+				if (e instanceof ClientResponseError && e.error === "NotFound") {
 					return; // logging this is just noise
 				} else {
 					console.error(`failed to fetch post record for ${uri}: ${errorToString(e)}`);
@@ -479,8 +477,6 @@ export class Backfill {
 		} catch (e) {
 			// if the appview says a post doesn't exist, trust it
 			if (e instanceof ClientResponseError && e.error === "NotFound") throw e;
-			// if it's a TimeoutError, rethrow it to be handled by BackgroundQueue
-			if (e instanceof DOMException && e.name === "TimeoutError") throw e;
 			console.warn(
 				`failed to fetch thread view for ${uri}, falling back to getRecord: ${
 					errorToString(e)
