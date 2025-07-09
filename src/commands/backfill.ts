@@ -45,9 +45,9 @@ async function backfillCommandImpl(
 
 	if (!embeddings) {
 		console.warn(
-			`backfilling without generating embeddings; you can run ${
+			`${pc.yellow("backfilling without generating embeddings; you can run")} ${
 				pc.green("`pinakes embeddings`")
-			} later to generate embeddings`,
+			} ${pc.yellow("later to generate embeddings")}`,
 		);
 	}
 
