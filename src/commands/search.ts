@@ -10,7 +10,12 @@ export const searchCommand = buildCommand({
 	parameters: {
 		positional: {
 			kind: "tuple",
-			parameters: [{ placeholder: "query", brief: "search query", parse: String }],
+			parameters: [{
+				placeholder: "query",
+				brief: "search query",
+				parse: String,
+				optional: true,
+			}],
 		},
 		flags: {
 			vector: { kind: "boolean", brief: "whether to use vector search", default: false },
@@ -105,7 +110,7 @@ async function searchCommandImpl(
 		threshold?: number;
 		includeAlt: boolean;
 	},
-	query: string,
+	query?: string,
 ) {
 	for (const i in creator) {
 		if (creator[i].startsWith("did:")) continue;
@@ -144,7 +149,7 @@ async function searchCommandImpl(
 	};
 	const posts: Array<
 		Post & { textDistance?: number; altTextDistance?: number; bestDistance?: number }
-	> = vector
+	> = vector && query?.length
 		? await (async () => {
 			console.log("loading embeddings model...");
 			await loadEmbeddingsModel();

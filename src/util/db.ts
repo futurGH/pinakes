@@ -177,14 +177,18 @@ export class Database {
 		).executeTakeFirst();
 	}
 
-	async searchPostsText(text: string, options: SearchPostsOptions) {
+	async searchPostsText(text: string | undefined, options: SearchPostsOptions) {
 		const { includeAltText, order = "desc" } = options;
 
-		const qb = this.db.selectFrom("post").selectAll().where((eb) => {
-			const q = eb("text", "like", `%${text}%`);
-			if (includeAltText) return q.or("altText", "like", `%${text}%`);
-			return q;
-		}).orderBy("createdAt", order);
+		let qb = this.db.selectFrom("post").selectAll().orderBy("createdAt", order);
+		if (text || includeAltText) {
+			qb = qb.where((eb) => {
+				const q: Expression<SqlBool>[] = [];
+				if (text) q.push(eb("text", "like", `%${text}%`));
+				if (includeAltText) q.push(eb("altText", "like", `%${text}%`));
+				return eb.or(q);
+			});
+		}
 
 		return await this.applySearchPostsOptions(qb, options).execute();
 	}
