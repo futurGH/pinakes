@@ -3,6 +3,7 @@ import { backfillCommand } from "./commands/backfill.ts";
 import { configRoute } from "./commands/config/index.ts";
 import { embeddingsCommand } from "./commands/embeddings.ts";
 import { explainCommand } from "./commands/explain.ts";
+import { importCommand } from "./commands/import.ts";
 import { searchCommand } from "./commands/search.ts";
 import { formatException } from "./util/util.ts";
 
@@ -14,6 +15,7 @@ const routes = buildRouteMap({
 		config: configRoute,
 		backfill: backfillCommand,
 		embeddings: embeddingsCommand,
+		import: importCommand,
 		search: searchCommand,
 		explain: explainCommand,
 	},

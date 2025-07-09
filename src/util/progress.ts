@@ -11,7 +11,11 @@ export class ProgressTracker {
 	speeds: Record<string, number[]> = {};
 
 	constructor(private keys: string[] = [DEFAULT_KEY]) {
-		this.multibar = new MultiBar({ format: this.formatter, forceRedraw: true });
+		this.multibar = new MultiBar({
+			format: this.formatter,
+			forceRedraw: true,
+			clearOnComplete: true,
+		});
 	}
 
 	incrementCompleted(key: string | undefined = DEFAULT_KEY) {
@@ -49,11 +53,7 @@ export class ProgressTracker {
 	incrementWhenDone(key: string | undefined = DEFAULT_KEY) {
 		if (!key || !this.progress[key] || !this.bars[key]) return;
 		this.incrementTotal(key);
-		return {
-			[Symbol.dispose]() {
-				this.incrementWhenDone(key);
-			},
-		};
+		return { [Symbol.dispose]: () => this.incrementCompleted(key) };
 	}
 
 	start() {

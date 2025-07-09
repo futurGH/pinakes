@@ -14,8 +14,8 @@ export interface QueueOptions {
 export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter {
 	private readonly _queue: T[] = [];
 	private _active = 0;
-	private _running = 0;
 
+	private readonly runningTasks = new Set<T>();
 	private readonly _fn: (...args: T) => unknown;
 	private readonly _hard: number;
 	private readonly _soft?: number;
@@ -24,11 +24,11 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 
 	private promisesWaitingForSpace: Array<() => void> = [];
 
-	get activeTasks() { // tasks currently counting against softConcurrency
+	get active() { // tasks currently counting against softConcurrency
 		return this._active;
 	}
-	get runningTasks() { // all tasks currently running
-		return this._running;
+	get running() { // all tasks currently running
+		return this.runningTasks.size;
 	}
 	get size() { // waiting jobs not yet started
 		return this._queue.length;
@@ -67,11 +67,11 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 	}
 
 	async processAll(): Promise<void> {
-		if (this.size === 0 && this._running === 0) return;
+		if (this.size === 0 && this.running === 0) return;
 
 		return await new Promise((resolve) => {
 			const onDone = () => {
-				if (this.size === 0 && this._running === 0) {
+				if (this.size === 0 && this.running === 0) {
 					this.off("completed", onDone);
 					this.off("error", onDone);
 					resolve();
@@ -85,8 +85,8 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 
 	private _canStart(): boolean {
 		if (this._queue.length === 0) return false;
-		if (this._running >= this._hard) return false;
-		if (this._soft !== undefined && this._active >= this._soft) return false;
+		if (this.running >= this._hard) return false;
+		if (this._soft !== undefined && this.active >= this._soft) return false;
 		return true;
 	}
 
@@ -114,7 +114,7 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 	}
 
 	private _startTask(args: T) {
-		this._running++;
+		this.runningTasks.add(args);
 
 		let countsTowardsSoft = this._soft !== undefined;
 		if (countsTowardsSoft) this._active++;
@@ -132,13 +132,20 @@ export class BackgroundQueue<T extends readonly unknown[]> extends EventEmitter 
 		Promise.resolve().then(() => this._fn(...args)).catch((err) => {
 			this.emit("error", err);
 		}).finally(() => {
-			this._running--;
+			this.runningTasks.delete(args);
+
 			if (timeoutId) clearTimeout(timeoutId);
+
 			if (countsTowardsSoft) {
 				// fast tasks that finished before the soft timeout
 				this._active = Math.max(this._active - 1, 0);
 			}
+
 			this.emit("completed");
+			if (this.size === 0 && this.running === 0) {
+				this.emit("drained");
+			}
+
 			this._notifyWaiting();
 			this._drain();
 		});

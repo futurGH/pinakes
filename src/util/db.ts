@@ -14,7 +14,8 @@ export type PostInclusionReason =
 	| "descendant_of"
 	| "quoted_by"
 	| "linked_by"
-	| "by_follow";
+	| "by_follow"
+	| "repo_import";
 
 export interface Post {
 	creator: string;

@@ -93,8 +93,8 @@ export class Backfill {
 		if (this.embeddingsEnabled) multibarKeys.push("embeddings");
 
 		this.progress = new ProgressTracker(multibarKeys);
-		this.postQueue.on("error", console.error);
-		this.repoQueue.on("error", console.error);
+		this.postQueue.on("error", (err) => console.error(err));
+		this.repoQueue.on("error", (err) => console.error(err));
 	}
 
 	async backfill() {
@@ -178,33 +178,13 @@ export class Backfill {
 				(c) => c.get("com.atproto.sync.getRepo", { params: { did }, as: "bytes" }),
 			);
 
-			const car = CarReader.fromUint8Array(repoBytes);
-			assert(
-				car.roots.length === 1,
-				`expected only 1 root in the car archive; got=${car.roots.length}`,
-			);
-
-			const blockmap = collectBlock(car);
-			assert(
-				blockmap.size > 0,
-				`expected at least 1 block in the archive; got=${blockmap.size}`,
-			);
-
-			const commit = readBlock(blockmap, car.roots[0], isCommit);
-
 			const records: Array<
 				{ uri: ResourceUri; collection: string; record: unknown; inclusion?: PostInclusion }
 			> = [];
 
-			for (const { key, cid } of walkMstEntries(blockmap, commit.data)) {
-				const [collection, rkey] = key.split("/");
-
+			const { rev: newRev, iterator } = this.processRepoBytes(repoBytes);
+			for await (const { collection, rkey, record } of iterator()) {
 				if (!collections.has(collection) || !(collection in this.processors)) continue;
-
-				const carEntry = blockmap.get(cid.$link);
-				assert(carEntry != null, `cid not found in blockmap; cid=${cid}`);
-
-				const record = decodeCbor(carEntry.bytes);
 
 				// for repos that aren't the user's own, ignore records created prior to the last known rev
 				// for the user's repo, ignore old records unless they're a follow
@@ -242,10 +222,38 @@ export class Backfill {
 				await this.processors[collection](uri, record, inclusion);
 			}
 
-			await this.db.setRepoRev(did, commit.rev);
+			await this.db.setRepoRev(did, newRev);
 		} catch (e) {
 			console.error(`failed to process repo ${did}: ${errorToString(e)}`);
 		}
+	}
+
+	processRepoBytes(repoBytes: Uint8Array) {
+		const car = CarReader.fromUint8Array(repoBytes);
+		assert(
+			car.roots.length === 1,
+			`expected only 1 root in the car archive; got=${car.roots.length}`,
+		);
+
+		const blockmap = collectBlock(car);
+		assert(blockmap.size > 0, `expected at least 1 block in the archive; got=${blockmap.size}`);
+
+		const { rev, data } = readBlock(blockmap, car.roots[0], isCommit);
+
+		return {
+			rev,
+			*iterator() {
+				for (const { key, cid } of walkMstEntries(blockmap, data)) {
+					const [collection, rkey] = key.split("/");
+
+					const carEntry = blockmap.get(cid.$link);
+					assert(carEntry != null, `cid not found in blockmap; cid=${cid}`);
+
+					const record = decodeCbor(carEntry.bytes);
+					yield { collection, rkey, record };
+				}
+			},
+		};
 	}
 
 	async processPost(
@@ -408,7 +416,7 @@ export class Backfill {
 					});
 					parent = parent.parent!; // we don't actually know it's non-null but the while loop will exit anyways if it's not
 				} else {
-					if (is(AppBskyFeedDefs.blockedPostSchema, parent)) {
+					if (is(AppBskyFeedDefs.blockedPostSchema, parent) && parent.uri !== uri) {
 						void this.postQueue.add(parent.uri, {
 							depth: depth + 1,
 							inclusion: { reason: "ancestor_of", context: uri },
@@ -439,7 +447,7 @@ export class Backfill {
 		if (this.toWrite.length > WRITE_POSTS_BATCH_SIZE) void this.writePosts();
 	}
 
-	private async writePosts(): Promise<void> {
+	async writePosts(): Promise<void> {
 		while (this.toWrite.length > 0) {
 			const batch = this.toWrite.splice(0, WRITE_POSTS_BATCH_SIZE);
 			await this.db.insertPosts(batch).catch((e) =>
