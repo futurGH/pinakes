@@ -19,6 +19,7 @@
         "gradient-string": "^3.0.0",
         "kysely": "^0.28.2",
         "kysely-libsql": "^0.7.1",
+        "large-set": "^1.0.3",
         "picocolors": "^1.1.1",
         "undici": "^7.11.0",
         "xxhash-wasm": "^1.1.0",
@@ -267,6 +268,8 @@
     "kysely": ["kysely@0.28.2", "", {}, "sha512-4YAVLoF0Sf0UTqlhgQMFU9iQECdah7n+13ANkiuVfRvlK+uI0Etbgd7bVP36dKlG+NXWbhGua8vnGt+sdhvT7A=="],
 
     "kysely-libsql": ["kysely-libsql@0.7.1", "", { "dependencies": { "@libsql/client": "^0.15.0" }, "peerDependencies": { "kysely": "*" } }, "sha512-65zt+cBklFuTJLirWep3ZC+K2mDSwyR/af1cW6xUFy9PUYJBp/MNaswX7iaiP9bybRsTxe/b3VM8IDbqK4jY9Q=="],
+
+    "large-set": ["large-set@1.0.3", "", {}, "sha512-rwGYdAnxac5agtRYncJcTKNw0TMjZMGxn/gXTAR4g/M2YU5UrOooP7mwjc6K8h1EsDWDvSfeW5zJBDaLC2GM0A=="],
 
     "libsql": ["libsql@0.5.13", "", { "dependencies": { "@neon-rs/load": "^0.0.4", "detect-libc": "2.0.2" }, "optionalDependencies": { "@libsql/darwin-arm64": "0.5.13", "@libsql/darwin-x64": "0.5.13", "@libsql/linux-arm-gnueabihf": "0.5.13", "@libsql/linux-arm-musleabihf": "0.5.13", "@libsql/linux-arm64-gnu": "0.5.13", "@libsql/linux-arm64-musl": "0.5.13", "@libsql/linux-x64-gnu": "0.5.13", "@libsql/linux-x64-musl": "0.5.13", "@libsql/win32-x64-msvc": "0.5.13" }, "os": [ "linux", "win32", "darwin", ], "cpu": [ "arm", "x64", "arm64", ] }, "sha512-5Bwoa/CqzgkTwySgqHA5TsaUDRrdLIbdM4egdPcaAnqO3aC+qAgS6BwdzuZwARA5digXwiskogZ8H7Yy4XfdOg=="],
 

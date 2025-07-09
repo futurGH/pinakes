@@ -15,6 +15,7 @@ import { decode as decodeCbor } from "@atcute/cbor";
 import { Client, ClientResponseError } from "@atcute/client";
 import { type Did, isTid, type ResourceUri } from "@atcute/lexicons/syntax";
 import { is } from "@atcute/lexicons/validations";
+import LargeSet from "large-set";
 import assert from "node:assert";
 import pc from "picocolors";
 import xxhash from "xxhash-wasm";
@@ -75,7 +76,7 @@ export class Backfill {
 		{ hardConcurrency: 1 },
 	);
 
-	seenPosts = new Set<number>();
+	seenPosts = new LargeSet<number>();
 	toWrite: Post[] = [];
 
 	embeddingsEnabled: boolean;
