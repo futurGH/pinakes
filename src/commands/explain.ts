@@ -1,3 +1,5 @@
+import { parseCanonicalResourceUri } from "@atcute/lexicons";
+import { IdResolver } from "@atproto/identity";
 import { buildCommand } from "@stricli/core";
 import pc from "picocolors";
 import type { AppContext } from "../context.ts";
@@ -16,6 +18,8 @@ export const explainCommand = buildCommand({
 
 async function explainCommandImpl(this: AppContext, _: {}, uri: string) {
 	const seen = new Set<string>();
+
+	const idResolver = new IdResolver();
 
 	const explainUri = async (currentUri: string, prefix = "") => {
 		if (seen.has(currentUri)) {
@@ -41,7 +45,17 @@ async function explainCommandImpl(this: AppContext, _: {}, uri: string) {
 			}
 
 			let reasonText = pc.green(post.inclusionReason);
-			if (post.inclusionContext) reasonText += ` ${pc.yellow(post.inclusionContext)}`;
+			if (post.inclusionContext) {
+				const parsedInclusionContextUri = parseCanonicalResourceUri(post.inclusionContext);
+				if (parsedInclusionContextUri.ok) {
+					const handle =
+						(await idResolver.did.resolveAtprotoData(
+							parsedInclusionContextUri.value.repo,
+						).catch(() => null))?.handle;
+					if (handle) reasonText += ` ${pc.cyan(handle)}`;
+				}
+				reasonText += ` ${pc.yellow(post.inclusionContext)}`;
+			}
 
 			console.log(`${prefix}${post.inclusionContext ? "├" : "╰"}─ ${reasonText}`);
 
