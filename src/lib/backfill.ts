@@ -93,8 +93,6 @@ export class Backfill {
 		if (this.embeddingsEnabled) multibarKeys.push("embeddings");
 
 		this.progress = new ProgressTracker(multibarKeys);
-		this.postQueue.on("queued", () => this.progress.incrementTotal("posts"));
-		this.postQueue.on("completed", () => this.progress.incrementCompleted("posts"));
 		this.postQueue.on("error", console.error);
 		this.repoQueue.on("error", console.error);
 	}
@@ -258,6 +256,8 @@ export class Backfill {
 
 		const uriHash = h32(uri);
 		if (this.seenPosts.has(uriHash)) return;
+
+		using _ = this.progress.incrementWhenDone("posts");
 
 		let threadView: AppBskyFeedDefs.ThreadViewPost | undefined;
 		if (!record) {

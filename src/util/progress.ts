@@ -46,6 +46,16 @@ export class ProgressTracker {
 		}
 	}
 
+	incrementWhenDone(key: string | undefined = DEFAULT_KEY) {
+		if (!key || !this.progress[key] || !this.bars[key]) return;
+		this.incrementTotal(key);
+		return {
+			[Symbol.dispose]() {
+				this.incrementWhenDone(key);
+			},
+		};
+	}
+
 	start() {
 		for (const key of this.keys) {
 			const progress = { completed: 0, total: 0 };
