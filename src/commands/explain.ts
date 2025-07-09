@@ -3,7 +3,7 @@ import { IdResolver } from "@atproto/identity";
 import { buildCommand } from "@stricli/core";
 import pc from "picocolors";
 import type { AppContext } from "../context.ts";
-import { parseAtUri } from "../util/util.ts";
+import { linkAtUri, parseAtUri } from "../util/util.ts";
 
 export const explainCommand = buildCommand({
 	func: explainCommandImpl,
@@ -54,7 +54,7 @@ async function explainCommandImpl(this: AppContext, _: {}, uri: string) {
 						).catch(() => null))?.handle;
 					if (handle) reasonText += ` ${pc.cyan(handle)}`;
 				}
-				reasonText += ` ${pc.yellow(post.inclusionContext)}`;
+				reasonText += ` ${pc.yellow(linkAtUri(post.inclusionContext))}`;
 			}
 
 			console.log(`${prefix}${post.inclusionContext ? "├" : "╰"}─ ${reasonText}`);
@@ -67,6 +67,6 @@ async function explainCommandImpl(this: AppContext, _: {}, uri: string) {
 		}
 	};
 
-	console.log(`╭─ ${pc.blue(uri)}`);
+	console.log(`╭─ ${pc.blue(linkAtUri(uri))}`);
 	await explainUri(uri, "│  ");
 }

@@ -16,6 +16,7 @@ import {
 	UnsatisfiedFlagError,
 	UnsatisfiedPositionalError,
 } from "@stricli/core";
+import terminalLink from "terminal-link";
 
 export function errorToString(error: unknown): string {
 	return typeof error === "object" && error !== null && "message" in error
@@ -33,6 +34,18 @@ export function parseAtUri(uri: string) {
 	if (!parsed.ok) throw new Error(`invalid AT URI: ${uri}`);
 	return parsed.value;
 }
+
+export const linkAtUri = (uri: string, text?: string) => {
+	try {
+		const { repo, collection, rkey } = parseAtUri(uri);
+		if (collection !== "app.bsky.feed.post") throw "";
+		return terminalLink(text ?? uri, `https://bsky.app/profile/${repo}/post/${rkey}`, {
+			fallback: false,
+		});
+	} catch {
+		return uri;
+	}
+};
 
 export function logarithmicScale(
 	from: [number, number],

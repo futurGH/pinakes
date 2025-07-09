@@ -1,9 +1,11 @@
 import { IdResolver } from "@atproto/identity";
 import { buildCommand, numberParser } from "@stricli/core";
 import pc from "picocolors";
+import terminalLink from "terminal-link";
 import type { AppContext } from "../context.ts";
 import { Post, PostWithDistance, SearchPostsOptions } from "../util/db.ts";
 import { extractEmbeddings, loadEmbeddingsModel } from "../util/embeddings.ts";
+import { linkAtUri } from "../util/util.ts";
 
 export const searchCommand = buildCommand({
 	func: searchCommandImpl,
@@ -172,9 +174,10 @@ async function formatPost(post: PostWithDistance, includeAlt: boolean): Promise<
 	let result = "";
 
 	const handle = await getHandle(post.creator) ?? post.creator;
+
 	const uri = `at://${post.creator}/app.bsky.feed.post/${post.rkey}`;
 
-	let title = `${pc.blue(`@${handle}`)} ${pc.gray(`(${uri})`)} - ${
+	let title = `${pc.blue(`@${handle}`)} ${pc.gray(linkAtUri(uri))} - ${
 		pc.dim(new Date(post.createdAt).toLocaleString())
 	}`;
 	if (post.bestDistance) {
@@ -184,7 +187,7 @@ async function formatPost(post: PostWithDistance, includeAlt: boolean): Promise<
 	result += title;
 
 	if (post.replyParent) {
-		result += pc.gray(`\n↳  to: ${post.replyParent}`);
+		result += pc.gray(`\n↳  to: ${linkAtUri(post.replyParent)}`);
 	}
 
 	result += `\n${post.text}`;
@@ -204,7 +207,7 @@ async function formatPost(post: PostWithDistance, includeAlt: boolean): Promise<
 	}
 
 	if (post.quoted) {
-		result += `\n${pc.gray(`╰──  quoted: ${post.quoted}`)}`;
+		result += `\n${pc.gray(`╰──  quoted: ${linkAtUri(post.quoted)}`)}`;
 	}
 	return result;
 }
