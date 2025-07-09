@@ -1,5 +1,7 @@
 import { createClient } from "@libsql/client/node";
 import { Kysely, type SelectQueryBuilder, sql } from "kysely";
+import { Expression } from "kysely";
+import { SqlBool } from "kysely";
 import { LibsqlDialect } from "kysely-libsql";
 import { PUBLIC_APPVIEW_URL } from "../lib/backfill.ts";
 import { toDateOrNull } from "./util.ts";
@@ -176,19 +178,22 @@ export class Database {
 	}
 
 	async searchPostsText(text: string, options: SearchPostsOptions) {
-		const { includeAltText } = options;
+		const { includeAltText, order = "desc" } = options;
 
 		const qb = this.db.selectFrom("post").selectAll().where((eb) => {
 			const q = eb("text", "like", `%${text}%`);
 			if (includeAltText) return q.or("altText", "like", `%${text}%`);
 			return q;
-		}).orderBy("createdAt", "desc");
+		}).orderBy("createdAt", order);
 
 		return await this.applySearchPostsOptions(qb, options).execute();
 	}
 
-	async searchPostsVector(embedding: Float32Array, options: SearchPostsOptions) {
-		const { includeAltText } = options;
+	async searchPostsVector(
+		embedding: Float32Array,
+		options: SearchPostsOptions,
+	): Promise<PostWithDistance[]> {
+		const { includeAltText, threshold = 0.5, order = "asc" } = options;
 
 		const distanceExpr = sql<number>`vector_distance_cos(embedding, ${
 			formatVector(embedding)
@@ -209,35 +214,56 @@ export class Database {
 			`
 			: distanceExpr;
 
-		const qb = this.db.selectFrom("post").selectAll().select([
-			distanceExpr.as("textDistance"),
-			...(includeAltText ? [altDistanceExpr.as("altTextDistance")] : []),
-			bestDistanceExpr.as("bestDistance"),
-		]).where("embedding", "is not", null).orderBy("bestDistance", "desc");
+		const qb = this.db.with(
+			"results",
+			(eb) =>
+				this.applySearchPostsOptions(
+					eb.selectFrom("post").selectAll().select([
+						distanceExpr.as("textDistance"),
+						...(includeAltText ? [altDistanceExpr.as("altTextDistance")] : []),
+						bestDistanceExpr.as("bestDistance"),
+					]).where("embedding", "is not", null).orderBy("bestDistance", order),
+					options,
+				),
+		).selectFrom("results").selectAll().where("bestDistance", "<=", threshold);
 
-		return await this.applySearchPostsOptions(qb, options).execute();
+		return await qb.execute();
 	}
 
 	private applySearchPostsOptions<T extends SelectQueryBuilder<Tables, "post", Post>>(
 		qb: T,
 		options: SearchPostsOptions,
 	): T {
-		const { results, creator, parentAuthor, before, after } = options;
+		const { results, creator, parentAuthor, rootAuthor, before, after } = options;
 
 		const beforeTs = toDateOrNull(before);
 		if (before && !beforeTs) throw new Error(`invalid 'before' date: ${before}`);
 		const afterTs = toDateOrNull(after);
 		if (after && !afterTs) throw new Error(`invalid 'after' date: ${after}`);
 
-		// avoiding several "not assignable to type T" errors on following lines
-		// deno-lint-ignore no-explicit-any
-		let _qb: any = qb;
+		return qb.where((eb) => {
+			const conditions: Expression<SqlBool>[] = [];
 
-		if (creator) _qb = _qb.where("creator", "=", creator);
-		if (parentAuthor) _qb = _qb.where("replyParent", "like", `at://${parentAuthor}%`);
-		if (beforeTs) _qb = _qb.where("createdAt", "<", beforeTs.getTime());
-		if (afterTs) _qb = _qb.where("createdAt", ">", afterTs.getTime());
-		return _qb.limit(results);
+			if (creator) {
+				conditions.push(eb.or(creator.map((creator) => eb("creator", "=", creator))));
+			}
+			if (parentAuthor?.length) {
+				conditions.push(
+					eb.or(
+						parentAuthor.map((parent) => eb("replyParent", "like", `at://${parent}%`)),
+					),
+				);
+			}
+			if (rootAuthor?.length) {
+				conditions.push(
+					eb.or(rootAuthor.map((root) => eb("replyRoot", "like", `at://${root}%`))),
+				);
+			}
+			if (beforeTs) conditions.push(eb("createdAt", "<", beforeTs.getTime()));
+			if (afterTs) conditions.push(eb("createdAt", ">", afterTs.getTime()));
+
+			return eb.and(conditions);
+		}).limit(results) as T;
 	}
 
 	async getRepoRev(did: string) {
@@ -283,13 +309,22 @@ export type ConfigSettings = {
 	[K in keyof typeof ConfigSettings]: (typeof ConfigSettings)[K]["default"];
 };
 
+export type PostWithDistance = Post & {
+	textDistance?: number;
+	altTextDistance?: number;
+	bestDistance?: number;
+};
+
 export interface SearchPostsOptions {
 	results: number;
-	creator?: string;
-	parentAuthor?: string;
+	creator?: string[];
+	parentAuthor?: string[];
+	rootAuthor?: string[];
 	before?: string;
 	after?: string;
 	includeAltText?: boolean;
+	order?: "asc" | "desc";
+	threshold?: number;
 }
 
 export const formatVector = (embedding: Float32Array) => {
