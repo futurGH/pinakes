@@ -9,13 +9,8 @@ export const searchCommand = buildCommand({
 	func: searchCommandImpl,
 	parameters: {
 		positional: {
-			kind: "tuple",
-			parameters: [{
-				placeholder: "query",
-				brief: "search query",
-				parse: String,
-				optional: true,
-			}],
+			kind: "array",
+			parameter: { placeholder: "query", brief: "search query", parse: String, default: "" },
 		},
 		flags: {
 			vector: { kind: "boolean", brief: "whether to use vector search", default: false },
@@ -110,8 +105,10 @@ async function searchCommandImpl(
 		threshold?: number;
 		includeAlt: boolean;
 	},
-	query?: string,
+	...queryParts: string[]
 ) {
+	const query = queryParts.join(" ");
+
 	for (const i in creator) {
 		if (creator[i].startsWith("did:")) continue;
 		if (creator[i].startsWith("@")) creator[i] = creator[i].slice(1);
