@@ -94,7 +94,9 @@ export class Database {
 			.on("post")
 			.column("creator")
 			.execute();
-		await sql`CREATE INDEX IF NOT EXISTS post_embedding_idx ON post (libsql_vector_idx(embedding, 'compress_neighbors=float8'))`
+		await sql`CREATE INDEX IF NOT EXISTS post_embedding_idx ON post (libsql_vector_idx(embedding, 'max_neighbors=5', 'compress_neighbors=float8'))`
+			.execute(this.db);
+		await sql`CREATE INDEX IF NOT EXISTS "post_altTextEmbedding_idx" ON post (libsql_vector_idx("altTextEmbedding", 'max_neighbors=5', 'compress_neighbors=float8'))`
 			.execute(this.db);
 
 		await /* dprint-ignore */ this.db.schema
