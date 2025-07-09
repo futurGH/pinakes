@@ -328,7 +328,10 @@ export class Backfill {
 					quotedRecordView = threadView.post.embed.record.record;
 				}
 			}
-			if (quotedRecordView && is(AppBskyFeedPost.mainSchema, quotedRecordView.value)) {
+			if (
+				quotedRecordView && is(AppBskyFeedPost.mainSchema, quotedRecordView.value)
+				&& quoted !== uri
+			) {
 				void this.postQueue.prepend(quoted, { // prepend so record doesn't stick around in the heap
 					depth: depth + 1,
 					record: quotedRecordView?.value,
@@ -347,7 +350,7 @@ export class Backfill {
 		if (inclusion.reason === "descendant_of") return;
 
 		// if the post is a reply, queue the root and/or its ancestors
-		if (record.reply) {
+		if (record.reply && record.reply.root.uri !== uri) {
 			// but only if this post is the reason we're looking at this thread;
 			// we don't want to re-queue the root for every ancestor in between
 			if (inclusion.reason === "ancestor_of") return;
@@ -376,13 +379,13 @@ export class Backfill {
 
 		// if we couldn't get the thread or it was invalid, just queue up the parent & root uris if we have them
 		if (!threadView) {
-			if (record.reply?.parent) {
+			if (record.reply?.parent && record.reply.parent.uri !== uri) {
 				void this.postQueue.add(record.reply.parent.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
 				});
 			}
-			if (record.reply?.root) {
+			if (record.reply?.root && record.reply.root.uri !== uri) {
 				void this.postQueue.add(record.reply.root.uri, {
 					depth: depth + 1,
 					inclusion: { reason: "ancestor_of", context: uri },
@@ -395,7 +398,7 @@ export class Backfill {
 		if (threadView.parent) {
 			let parent = threadView.parent;
 			while (parent) {
-				if (is(AppBskyFeedDefs.threadViewPostSchema, parent)) {
+				if (is(AppBskyFeedDefs.threadViewPostSchema, parent) && parent.post.uri !== uri) {
 					void this.postQueue.prepend(parent.post.uri, { // prepend so record doesn't stick around in the heap
 						record: is(AppBskyFeedPost.mainSchema, parent.post.record)
 							? parent.post.record
@@ -513,6 +516,7 @@ export class Backfill {
 		if (threadDepth > maxThreadDepth) return;
 		for (const reply of replies) {
 			if (!is(AppBskyFeedDefs.threadViewPostSchema, reply)) continue;
+			if (reply.post.uri === sourceUri) continue; // no infinite loops
 			void this.postQueue.prepend(reply.post.uri, { // prepend so record doesn't stick around in the heap
 				record: is(AppBskyFeedPost.mainSchema, reply.post.record)
 					? reply.post.record
